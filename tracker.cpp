@@ -11,6 +11,7 @@
 #include <iostream>
 #include <cstring>
 #include <fstream>
+#include <vector>
 
 #include "PacketHeader.h"
 #include "crc32.h"
@@ -38,10 +39,15 @@ auto retrieveArgs(char* argv[]) {
 void readPeerListToTorrentFile(char* &peerList, char* &torrentFile) {
   ifstream peerListFile(peerList);
   string line;
+  vector<string> peerListVector;
   ofstream torrentFileStream;
   torrentFileStream.open(torrentFile);
   while (getline(peerListFile, line)) {
-    torrentFileStream << line << endl;
+    peerListVector.push_back(line);
+  }
+  torrentFileStream << peerListVector.size() << endl;
+  for (unsigned int i = 0; i < peerListVector.size(); i++) {
+    torrentFileStream << peerListVector[i] << endl;
   }
 }
 
@@ -49,8 +55,7 @@ void readInputFileToTorrentFile(char* &inputFile, char* &torrentFile) {
   int chunk = 0;
   ifstream inputFileStream(inputFile, ios::binary);
   string line;
-  ofstream torrentFileStream;
-  torrentFileStream.open(torrentFile, ios_base::app);
+  vector<string> fileChunks;
   char buffer[FILE_CHUNK_SIZE];
 
   while (!inputFileStream.eof()) {
@@ -59,9 +64,14 @@ void readInputFileToTorrentFile(char* &inputFile, char* &torrentFile) {
     unsigned int crc = crc32(buffer, FILE_CHUNK_SIZE);
     // form string with chunk number and crc
     string chunkString = to_string(chunk) + " " + to_string(crc) + "\n";
-    // write chunkString to torrentFile
-    torrentFileStream << chunkString;
+    fileChunks.push_back(chunkString);
     chunk++;
+  }
+  ofstream torrentFileStream;
+  torrentFileStream.open(torrentFile, ios_base::app);
+  torrentFileStream << chunk << endl;
+  for (unsigned int i = 0; i < fileChunks.size(); i++) {
+    torrentFileStream << fileChunks[i];
   }
 }
 
@@ -75,6 +85,9 @@ int main(int argc, char* argv[])
   readInputFileToTorrentFile(trackerArgs.inputFile, trackerArgs.torrentFile);
 
   // distributes torrent files to any peer that connects
+  // create thread for each peer
+  // each thread will open a socket and send the torrent file
+
 
   return 0;
 }
