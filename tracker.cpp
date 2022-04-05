@@ -15,6 +15,8 @@
 #include "PacketHeader.h"
 #include "crc32.h"
 
+#define FILE_CHUNK_SIZE 512000
+
 using namespace std; 
 
 struct args {
@@ -33,13 +35,33 @@ auto retrieveArgs(char* argv[]) {
   return newArgs;
 }
 
-void readPeerListToTorrentFile(char* &peerList) {
+void readPeerListToTorrentFile(char* &peerList, char* &torrentFile) {
   ifstream peerListFile(peerList);
   string line;
-  ofstream torrentFile;
-  torrentFile.open("torrent.txt");
+  ofstream torrentFileStream;
+  torrentFileStream.open(torrentFile);
   while (getline(peerListFile, line)) {
-    torrentFile << line << endl;
+    torrentFileStream << line << endl;
+  }
+}
+
+void readInputFileToTorrentFile(char* &inputFile, char* &torrentFile) {
+  int chunk = 0;
+  ifstream inputFileStream(inputFile, ios::binary);
+  string line;
+  ofstream torrentFileStream;
+  torrentFileStream.open(torrentFile, ios_base::app);
+  char buffer[FILE_CHUNK_SIZE];
+
+  while (!inputFileStream.eof()) {
+    inputFileStream.read(buffer, FILE_CHUNK_SIZE);
+    // run crc32 on the chunk
+    unsigned int crc = crc32(buffer, FILE_CHUNK_SIZE);
+    // form string with chunk number and crc
+    string chunkString = to_string(chunk) + " " + to_string(crc) + "\n";
+    // write chunkString to torrentFile
+    torrentFileStream << chunkString;
+    chunk++;
   }
 }
 
@@ -49,19 +71,8 @@ int main(int argc, char* argv[])
   // ./tracker <peers-list> <input-file> <torrent-file> <log> 
   args trackerArgs = retrieveArgs(argv);
 
-  // creates torrent files by...
-  // reading from peers-list.txt  <-- contains IPs of peers. Manually created file, trackerArgs.peerList is a path to the file
-  // reading from input-file.txt   <-- contains the file to be 'downloaded'. Manually created file, trackerArgs.inputFile is a path to the file.
-  // chunk inputFile into pieces of size CHUNK_SIZE
-  readPeerListToTorrentFile(trackerArgs.peerList);
-  
-  // create a torrent file torrent.txt
-  // X <-- number of peers
-  // 10.0.0.1 <-- peer IP 1
-  // 10.0.0.2 <-- peer IP 2
-  // Y <-- number of chunks
-  // 0 4314141516 <-- chunk 0 and crc of chunk 0
-  // 1 8345435731 <-- chunk 1 and crc of chunk 1
+  readPeerListToTorrentFile(trackerArgs.peerList, trackerArgs.torrentFile);
+  readInputFileToTorrentFile(trackerArgs.inputFile, trackerArgs.torrentFile);
 
   // distributes torrent files to any peer that connects
 
