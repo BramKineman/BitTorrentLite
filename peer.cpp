@@ -15,6 +15,8 @@
 #include "PacketHeader.h"
 #include "crc32.h"
 
+#define TRACKERPORT 6969
+
 using namespace std; 
 
 struct args {
@@ -37,11 +39,37 @@ auto retrieveArgs(char* argv[]) {
   return newArgs;
 }
 
+void connectToTracker(char* myIP, char* trackerIP) {
+  // create socket
+  int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+  if (sockfd < 0) {
+    perror("ERROR opening socket");
+    exit(1);
+  }
+  // connect to the tracker's binded socket
+  struct sockaddr_in tracker_addr;
+  tracker_addr.sin_family = AF_INET;
+  tracker_addr.sin_addr.s_addr = INADDR_ANY;
+  tracker_addr.sin_port = htons((u_short) TRACKERPORT);
+  struct hostent *tracker_host = gethostbyname(trackerIP);
+  if (tracker_host == NULL) {
+    perror("ERROR, no such host");
+    exit(1);
+  }
+  memcpy(&tracker_addr.sin_addr, tracker_host->h_addr_list[0], tracker_host->h_length);
+  if (connect(sockfd, (struct sockaddr *) &tracker_addr, sizeof(tracker_addr)) < 0) {
+    perror("ERROR connecting");
+    exit(1);
+  }
+  cout << "Connected to tracker" << endl;
+}
+
 int main(int argc, char* argv[]) 
 {	
   // PEER
   // ./peer <my-ip> <tracker-ip> <input-file> <owned-chunks> <output-file> <log> 
   args peerArgs = retrieveArgs(argv);
-  
+
+  connectToTracker(peerArgs.myIP, peerArgs.trackerIP);
   return 0;
 }

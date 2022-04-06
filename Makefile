@@ -1,10 +1,10 @@
 all: tracker peer
 
 tracker: tracker.o
-	g++ tracker.o -o tracker
+	g++ -pthread tracker.o -o tracker
 
 peer: peer.o
-	g++ peer.o -o peer
+	g++ -pthread peer.o -o peer
 
 tracker.o: tracker.cpp
 	g++ -c -Wall tracker.cpp
