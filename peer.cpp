@@ -11,6 +11,8 @@
 #include <iostream>
 #include <cstring>
 #include <fstream>
+#include <vector>
+#include <map>
 
 #include "PacketHeader.h"
 #include "crc32.h"
@@ -38,6 +40,11 @@ struct peerSocketInfo {
 
 struct packet : public PacketHeader {
   char data[FILE_CHUNK_SIZE];
+};
+
+struct torrentData {
+  vector<string> peerList;
+  map<int, string> chunkList;
 };
 
 auto retrieveArgs(char* argv[]) {
@@ -74,7 +81,7 @@ peerSocketInfo connectToTracker(char* myIP, char* trackerIP) {
     exit(1);
   }
   cout << "Connected to tracker" << endl;
-  
+
   return peerSocket;
 }
 
@@ -92,11 +99,10 @@ void requestTorrentFileFromTracker(peerSocketInfo &peerSocket) {
   cout << "Sent!" << endl;
 }
 
-void receiveTorrentFileFromTracker(peerSocketInfo &peerSocket) {
+packet receiveTorrentFileFromTracker(peerSocketInfo &peerSocket) {
   packet torrentFile;
   // clear torrentFile.data buffer
   memset(&torrentFile.data, 0, sizeof(torrentFile.data));
-  // int bytesReceived = recvfrom(peerSocket.sockfd, &torrentFile, sizeof(torrentFile), 0, (struct sockaddr *) &peerSocket.tracker_addr, &peerSocket.server_len);
   int bytesReceived = recv(peerSocket.sockfd, &torrentFile, sizeof(torrentFile), 0);
   if (bytesReceived < 0) {
     perror("ERROR receiving data");
@@ -104,6 +110,28 @@ void receiveTorrentFileFromTracker(peerSocketInfo &peerSocket) {
   }
   cout << "Received torrent file" << endl;
   cout << "With data: " << torrentFile.data << endl;
+  return torrentFile;
+}
+
+torrentData parseTorrentFile(char* torrentFile) {
+  torrentData torrentData;
+  char* numPeers = strtok(torrentFile, "\n");
+  
+  int numPeersInt = atoi(numPeers);
+  for (int i = 0; i < numPeersInt; i++) {
+    char* peer = strtok(NULL, "\n");
+    cout << "Peer: " << peer << endl;
+    torrentData.peerList.push_back(peer);
+  }
+  // get next line
+  char* numChunks = strtok(NULL, "\n");
+  int numChunksInt = atoi(numChunks);
+  for (int i = 0; i < numChunksInt; i++) {
+    strtok(NULL, " ");
+    char* chunkHash = strtok(NULL, "\n");
+    torrentData.chunkList[i] = chunkHash;
+  }
+  return torrentData;
 }
 
 int main(int argc, char* argv[]) 
@@ -115,8 +143,14 @@ int main(int argc, char* argv[])
   peerSocketInfo peerSocket = connectToTracker(peerArgs.myIP, peerArgs.trackerIP);
 
   requestTorrentFileFromTracker(peerSocket);
-  receiveTorrentFileFromTracker(peerSocket);
+  packet torrentFilePacket = receiveTorrentFileFromTracker(peerSocket);
+  torrentData torrentData = parseTorrentFile(torrentFilePacket.data);
 
+  // loop through torrentData.peerlist
+  for (unsigned int i = 0; i < torrentData.peerList.size(); i++) {
+    cout << "Connecting to peer " << torrentData.peerList[i] << endl;
+  }
+  
   // close socket
   close(peerSocket.sockfd);
   return 0;
