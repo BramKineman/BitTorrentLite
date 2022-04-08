@@ -16,6 +16,8 @@
 #include "crc32.h"
 
 #define TRACKERPORT 6969
+#define FILE_CHUNK_SIZE 512000
+#define TORRENT_REQUEST 0
 
 using namespace std; 
 
@@ -26,6 +28,16 @@ struct args {
   char* ownedChunks;
   char* outputFile;
   char* log;
+};
+
+struct peerSocketInfo {
+  int sockfd;
+  struct sockaddr_in tracker_addr;
+  socklen_t server_len;
+};
+
+struct packet : public PacketHeader {
+  char data[FILE_CHUNK_SIZE];
 };
 
 auto retrieveArgs(char* argv[]) {
@@ -39,38 +51,59 @@ auto retrieveArgs(char* argv[]) {
   return newArgs;
 }
 
-void connectToTracker(char* myIP, char* trackerIP) {
+peerSocketInfo connectToTracker(char* myIP, char* trackerIP) {
+  peerSocketInfo peerSocket;
   // create socket
-  int sockfd = socket(AF_INET, SOCK_STREAM, 0);
-  if (sockfd < 0) {
+  peerSocket.sockfd = socket(AF_INET, SOCK_STREAM, 0);
+  if (peerSocket.sockfd < 0) {
     perror("ERROR opening socket");
     exit(1);
   }
   // connect to the tracker's binded socket
-  struct sockaddr_in tracker_addr;
-  tracker_addr.sin_family = AF_INET;
-  tracker_addr.sin_addr.s_addr = INADDR_ANY;
-  tracker_addr.sin_port = htons((u_short) TRACKERPORT);
+  peerSocket.tracker_addr.sin_family = AF_INET;
+  peerSocket.tracker_addr.sin_addr.s_addr = INADDR_ANY;
+  peerSocket.tracker_addr.sin_port = htons((u_short) TRACKERPORT);
   struct hostent *tracker_host = gethostbyname(trackerIP);
   if (tracker_host == NULL) {
     perror("ERROR, no such host");
     exit(1);
   }
-  memcpy(&tracker_addr.sin_addr, tracker_host->h_addr_list[0], tracker_host->h_length);
-  if (connect(sockfd, (struct sockaddr *) &tracker_addr, sizeof(tracker_addr)) < 0) {
+  memcpy(&peerSocket.tracker_addr.sin_addr, tracker_host->h_addr_list[0], tracker_host->h_length);
+  if (connect(peerSocket.sockfd, (struct sockaddr *) &peerSocket.tracker_addr, sizeof(peerSocket.tracker_addr)) < 0) {
     perror("ERROR connecting");
     exit(1);
   }
   cout << "Connected to tracker" << endl;
+  
+  return peerSocket;
+}
 
-  // generate random number
-  srand(time(NULL));
-  int randomNum = rand() % 1000000;
-  // create file with random number
-  ofstream randomFile;
-  string randomFilePath = "randomFile" + to_string(randomNum) + ".txt";
-  randomFile.open(randomFilePath);
-  randomFile << randomNum << endl;
+packet createTorrentRequestPacket() {
+  packet torrentRequest;
+  torrentRequest.type = TORRENT_REQUEST;
+  torrentRequest.length = 0;
+  return torrentRequest;
+}
+
+void requestTorrentFileFromTracker(peerSocketInfo &peerSocket) {
+  packet torrentRequest = createTorrentRequestPacket();
+  cout << "Sending data with type " << torrentRequest.type << endl;
+  send(peerSocket.sockfd, &torrentRequest, sizeof(torrentRequest), MSG_NOSIGNAL);
+  cout << "Sent!" << endl;
+}
+
+void receiveTorrentFileFromTracker(peerSocketInfo &peerSocket) {
+  packet torrentFile;
+  // clear torrentFile.data buffer
+  memset(&torrentFile.data, 0, sizeof(torrentFile.data));
+  // int bytesReceived = recvfrom(peerSocket.sockfd, &torrentFile, sizeof(torrentFile), 0, (struct sockaddr *) &peerSocket.tracker_addr, &peerSocket.server_len);
+  int bytesReceived = recv(peerSocket.sockfd, &torrentFile, sizeof(torrentFile), 0);
+  if (bytesReceived < 0) {
+    perror("ERROR receiving data");
+    exit(1);
+  }
+  cout << "Received torrent file" << endl;
+  cout << "With data: " << torrentFile.data << endl;
 }
 
 int main(int argc, char* argv[]) 
@@ -79,6 +112,12 @@ int main(int argc, char* argv[])
   // ./peer <my-ip> <tracker-ip> <input-file> <owned-chunks> <output-file> <log> 
   args peerArgs = retrieveArgs(argv);
 
-  connectToTracker(peerArgs.myIP, peerArgs.trackerIP);
+  peerSocketInfo peerSocket = connectToTracker(peerArgs.myIP, peerArgs.trackerIP);
+
+  requestTorrentFileFromTracker(peerSocket);
+  receiveTorrentFileFromTracker(peerSocket);
+
+  // close socket
+  close(peerSocket.sockfd);
   return 0;
 }

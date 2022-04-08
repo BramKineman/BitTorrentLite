@@ -21,6 +21,7 @@
 
 #define FILE_CHUNK_SIZE 512000
 #define PORT 6969
+#define HEADER_SIZE sizeof(PacketHeader)
 
 using namespace std; 
 
@@ -31,11 +32,14 @@ struct args {
   char* log;
 };
 
-// tracket socket info for port binding
 struct trackerSocketInfo {
   int sockfd;
   struct sockaddr_in server_addr;
   int peerSocketfd;
+};
+
+struct packet : public PacketHeader {
+  char data[FILE_CHUNK_SIZE];
 };
 
 auto retrieveArgs(char* argv[]) {
@@ -113,14 +117,57 @@ trackerSocketInfo setupTrackerToListen() {
     cout << "Error listening for incoming connections" << endl;
     exit(0);
   }
+  return trackerSocket;
+}
+
+void acceptPeerConnection(trackerSocketInfo &trackerSocket) {
   // Accept incoming connection
   socklen_t addr_len = sizeof(trackerSocket.sockfd);
+  cout << "Trying to accept incoming connection" << endl;
   trackerSocket.peerSocketfd = accept(trackerSocket.sockfd, (struct sockaddr*)&trackerSocket.server_addr, &addr_len);
   if (trackerSocket.peerSocketfd == -1) {
     cout << "Error accepting incoming connection" << endl;
     exit(0);
   }
-  return trackerSocket;
+  cout << "I connected to a peer" << endl;
+}
+
+void sendTorrentFile(int sockfd, char* torrentFile) {
+  packet packetToSend;
+  memset(packetToSend.data, 0, sizeof(packetToSend.data));
+  packetToSend.type = 1;
+  // Open torrent file
+  ifstream torrentFileStream(torrentFile, ios::binary);
+  // Read torrent file into packet
+  torrentFileStream.read(packetToSend.data, FILE_CHUNK_SIZE);
+  unsigned int bytesRead = torrentFileStream.gcount();
+
+  // Send torrent file
+  ssize_t bytesSent = send(sockfd, &packetToSend, HEADER_SIZE + bytesRead, 0);
+  if (bytesSent == -1) {
+    cout << "Error sending torrent file" << endl;
+    exit(0);
+  }
+  torrentFileStream.close();
+  cout << "Send torrent file" << endl;
+
+}
+
+void receiveDataAndRespond(int sockfd, args trackerArgs) {
+  // create packet to receive into
+  packet p;
+  // receive data
+  int n = recv(sockfd, &p, sizeof(p), 0);
+  if (n == -1) {
+    cout << "Error receiving data" << endl;
+    exit(0);
+  }
+  
+  if (p.type == 0) {
+    cout << "Received torrent request packet" << endl;
+    // send torrent file
+    sendTorrentFile(sockfd, trackerArgs.torrentFile);
+  }
 }
 
 int main(int argc, char* argv[]) {
@@ -135,12 +182,13 @@ int main(int argc, char* argv[]) {
   // each thread will open a socket and send the torrent file
 
   // wait for connection request from peer and accept connection
-  // while(true) {
-  //   trackerSocketInfo trackerSocket = connectPeerSocket();
-  //   // thread to handle request, send torrent file
 
-  // }
   trackerSocketInfo trackerSocket = setupTrackerToListen();
-
+  acceptPeerConnection(trackerSocket);
+  receiveDataAndRespond(trackerSocket.peerSocketfd, trackerArgs);
+  // create new thread to send torrent file to peer
+  
+  // close tracker socket
+  close(trackerSocket.sockfd);
   return 0;
 }
