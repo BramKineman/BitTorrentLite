@@ -31,6 +31,13 @@ struct args {
   char* log;
 };
 
+// tracket socket info for port binding
+struct trackerSocketInfo {
+  int sockfd;
+  struct sockaddr_in server_addr;
+  int peerSocketfd;
+};
+
 auto retrieveArgs(char* argv[]) {
   args newArgs;
   newArgs.peerList = argv[1];
@@ -78,66 +85,62 @@ void readInputFileToTorrentFile(char* &inputFile, char* &torrentFile) {
   }
 }
 
-void connectPeerSocket(string peerIP) {
-  cout << "Connecting to peer " << peerIP << "..."<<endl;
+trackerSocketInfo setupTrackerToListen() {
+  trackerSocketInfo trackerSocket;
   // create tracker socket
-  int trackerSocket = socket(AF_INET, SOCK_STREAM, 0);
-  if (trackerSocket == -1) {
+  trackerSocket.sockfd = socket(AF_INET, SOCK_STREAM, 0);
+  if (trackerSocket.sockfd == -1) {
     cout << "Error creating tracker socket" << endl;
     exit(0);
   }
   // Allow port number to be reused
   int optval = 1;
-  if (setsockopt(trackerSocket, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval)) == -1) {
+  if (setsockopt(trackerSocket.sockfd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval)) == -1) {
     cout << "Error setting socket options" << endl;
     exit(0);
   }
-  // Bind tracker socket to peer IP address
-  struct sockaddr_in peerAddr;
-  memset(&peerAddr, 0, sizeof(peerAddr));
-  peerAddr.sin_family = AF_INET;
-  peerAddr.sin_addr.s_addr = INADDR_ANY;
-  peerAddr.sin_port = htons(PORT);
-  if (bind(trackerSocket, (struct sockaddr*)&peerAddr, sizeof(peerAddr)) == -1) {
+  // Bind tracker socket to PORT 6969
+  memset(&trackerSocket.server_addr, 0, sizeof(trackerSocket.server_addr));
+  trackerSocket.server_addr.sin_family = AF_INET;
+  trackerSocket.server_addr.sin_addr.s_addr = INADDR_ANY;
+  trackerSocket.server_addr.sin_port = htons(PORT);
+  if (bind(trackerSocket.sockfd, (struct sockaddr*)&trackerSocket.server_addr, sizeof(trackerSocket.server_addr)) == -1) {
     cout << "Error binding tracker socket" << endl;
     exit(0);
   }
   // Listen for incoming connections
-  if (listen(trackerSocket, 10) == -1) {
+  if (listen(trackerSocket.sockfd, 10) == -1) {
     cout << "Error listening for incoming connections" << endl;
     exit(0);
   }
   // Accept incoming connection
-  socklen_t peerAddrLen = sizeof(peerAddr);
-  int peerSocket = accept(trackerSocket, (struct sockaddr*)&peerAddr, &peerAddrLen);
-  if (peerSocket == -1) {
+  socklen_t addr_len = sizeof(trackerSocket.sockfd);
+  trackerSocket.peerSocketfd = accept(trackerSocket.sockfd, (struct sockaddr*)&trackerSocket.server_addr, &addr_len);
+  if (trackerSocket.peerSocketfd == -1) {
     cout << "Error accepting incoming connection" << endl;
     exit(0);
   }
-  cout << "Connected to peer " << peerIP << endl;
+  return trackerSocket;
 }
 
-int main(int argc, char* argv[]) 
-{	
+int main(int argc, char* argv[]) {
   // TRACKER
   // ./tracker <peers-list> <input-file> <torrent-file> <log> 
   args trackerArgs = retrieveArgs(argv);
   vector<string> peerList;
   readPeerListToTorrentFile(trackerArgs.peerList, trackerArgs.torrentFile, peerList);
   readInputFileToTorrentFile(trackerArgs.inputFile, trackerArgs.torrentFile);
-
   // distributes torrent files to any peer that connects
   // create thread for each peer
   // each thread will open a socket and send the torrent file
-  
-  // start thread for each peer in peerlist
-  for (unsigned int i = 0; i < peerList.size(); i++) {
-    thread t(connectPeerSocket, peerList[i]);
-    // t.detach();
-    //t.join();
-  }
 
+  // wait for connection request from peer and accept connection
+  // while(true) {
+  //   trackerSocketInfo trackerSocket = connectPeerSocket();
+  //   // thread to handle request, send torrent file
 
+  // }
+  trackerSocketInfo trackerSocket = setupTrackerToListen();
 
   return 0;
 }

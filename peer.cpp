@@ -62,6 +62,15 @@ void connectToTracker(char* myIP, char* trackerIP) {
     exit(1);
   }
   cout << "Connected to tracker" << endl;
+
+  // generate random number
+  srand(time(NULL));
+  int randomNum = rand() % 1000000;
+  // create file with random number
+  ofstream randomFile;
+  string randomFilePath = "randomFile" + to_string(randomNum) + ".txt";
+  randomFile.open(randomFilePath);
+  randomFile << randomNum << endl;
 }
 
 int main(int argc, char* argv[]) 
