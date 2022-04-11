@@ -178,6 +178,7 @@ int main(int argc, char* argv[]) {
   // ./tracker <peers-list> <input-file> <torrent-file> <log> 
   args trackerArgs = retrieveArgs(argv);
 
+  // Torrent file creation
   vector<string> peerList;
   readPeerListToTorrentFile(trackerArgs.peerList, trackerArgs.torrentFile, peerList);
   readInputFileToTorrentFile(trackerArgs.inputFile, trackerArgs.torrentFile);
