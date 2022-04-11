@@ -120,18 +120,6 @@ trackerSocketInfo setupTrackerToListen() {
   return trackerSocket;
 }
 
-void acceptPeerConnection(trackerSocketInfo &trackerSocket) {
-  // Accept incoming connection
-  socklen_t addr_len = sizeof(trackerSocket.sockfd);
-  cout << "Trying to accept incoming connection" << endl;
-  trackerSocket.peerSocketfd = accept(trackerSocket.sockfd, (struct sockaddr*)&trackerSocket.server_addr, &addr_len);
-  if (trackerSocket.peerSocketfd == -1) {
-    cout << "Error accepting incoming connection" << endl;
-    exit(0);
-  }
-  cout << "I connected to a peer" << endl;
-}
-
 void sendTorrentFile(int sockfd, char* torrentFile) {
   packet packetToSend;
   memset(packetToSend.data, 0, sizeof(packetToSend.data));
@@ -141,6 +129,7 @@ void sendTorrentFile(int sockfd, char* torrentFile) {
   // Read torrent file into packet
   torrentFileStream.read(packetToSend.data, FILE_CHUNK_SIZE);
   unsigned int bytesRead = torrentFileStream.gcount();
+  packetToSend.length = bytesRead;
 
   // Send torrent file
   ssize_t bytesSent = send(sockfd, &packetToSend, HEADER_SIZE + bytesRead, 0);
@@ -149,15 +138,14 @@ void sendTorrentFile(int sockfd, char* torrentFile) {
     exit(0);
   }
   torrentFileStream.close();
-  cout << "Send torrent file" << endl;
-
+  cout << "Sent torrent file" << endl;
 }
 
 void receiveDataAndRespond(int sockfd, args trackerArgs) {
   // create packet to receive into
   packet p;
   // receive data
-  int n = recv(sockfd, &p, sizeof(p), 0);
+  int n = recv(sockfd, &p, sizeof(p), MSG_WAITALL);
   if (n == -1) {
     cout << "Error receiving data" << endl;
     exit(0);
@@ -170,26 +158,42 @@ void receiveDataAndRespond(int sockfd, args trackerArgs) {
   }
 }
 
+void acceptPeerConnection(trackerSocketInfo &trackerSocket, args &trackerArgs) {
+  // Accept incoming connection
+  socklen_t addr_len = sizeof(trackerSocket.sockfd);
+  cout << "Trying to accept incoming connection" << endl;
+  trackerSocket.peerSocketfd = accept(trackerSocket.sockfd, (struct sockaddr*)&trackerSocket.server_addr, &addr_len);
+  if (trackerSocket.peerSocketfd == -1) {
+    cout << "Error accepting incoming connection" << endl;
+    exit(0);
+  }
+  cout << "I connected to a peer" << endl;
+
+  receiveDataAndRespond(trackerSocket.peerSocketfd, trackerArgs);
+}
+
 int main(int argc, char* argv[]) {
   // TRACKER
+  // TODO - determine if peers-list is path or file
   // ./tracker <peers-list> <input-file> <torrent-file> <log> 
   args trackerArgs = retrieveArgs(argv);
+
   vector<string> peerList;
   readPeerListToTorrentFile(trackerArgs.peerList, trackerArgs.torrentFile, peerList);
   readInputFileToTorrentFile(trackerArgs.inputFile, trackerArgs.torrentFile);
-  // distributes torrent files to any peer that connects
-  // create thread for each peer
-  // each thread will open a socket and send the torrent file
-
-  // wait for connection request from peer and accept connection
 
   trackerSocketInfo trackerSocket = setupTrackerToListen();
-  acceptPeerConnection(trackerSocket);
-  receiveDataAndRespond(trackerSocket.peerSocketfd, trackerArgs);
-  // create new thread to send torrent file to peer
   
+  unsigned int peersConnected = 0;
+  while (peersConnected < peerList.size()) {
+    thread t(&acceptPeerConnection, ref(trackerSocket), ref(trackerArgs));
+    t.join();
+    peersConnected++;
+  }
+
+  // acceptPeerConnection(trackerSocket);
+  // receiveDataAndRespond(trackerSocket.peerSocketfd, trackerArgs);
   
-  // close tracker socket
   close(trackerSocket.sockfd);
   return 0;
 }

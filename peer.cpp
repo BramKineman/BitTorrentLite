@@ -97,9 +97,9 @@ packet createTorrentRequestPacket() {
 
 void requestTorrentFileFromTracker(peerSocketInfo &peerSocket) {
   packet torrentRequest = createTorrentRequestPacket();
-  cout << "Sending data with type " << torrentRequest.type << endl;
+  cout << "Requesting torrent file with type " << torrentRequest.type << endl;
   send(peerSocket.sockfd, &torrentRequest, sizeof(torrentRequest), MSG_NOSIGNAL);
-  cout << "Sent!" << endl;
+  cout << "Requested!" << endl;
 }
 
 packet receiveTorrentFileFromTracker(peerSocketInfo &peerSocket) {
@@ -112,7 +112,7 @@ packet receiveTorrentFileFromTracker(peerSocketInfo &peerSocket) {
     exit(1);
   }
   cout << "Received torrent file" << endl;
-  cout << "With data: " << torrentFile.data << endl;
+  cout << "With data: " << endl << torrentFile.data << endl;
   return torrentFile;
 }
 
@@ -167,7 +167,7 @@ int main(int argc, char* argv[])
   getOwnedChunksFromFile(peerArgs.ownedChunks, torrentData);
   determineNeededChunks(torrentData);
 
-  // loop through torrentData.peerlist
+  // connect to peers for receiving and sending simultaneously
   for (unsigned int i = 0; i < torrentData.peerList.size(); i++) {
     cout << "Connecting to peer " << torrentData.peerList[i] << endl;
   }
