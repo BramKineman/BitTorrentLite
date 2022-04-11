@@ -13,6 +13,7 @@
 #include <fstream>
 #include <vector>
 #include <map>
+#include <algorithm>
 
 #include "PacketHeader.h"
 #include "crc32.h"
@@ -45,6 +46,8 @@ struct packet : public PacketHeader {
 struct torrentData {
   vector<string> peerList;
   map<int, string> chunkList;
+  vector<int> ownedChunks;
+  vector<int> neededChunks;
 };
 
 auto retrieveArgs(char* argv[]) {
@@ -120,10 +123,8 @@ torrentData parseTorrentFile(char* torrentFile) {
   int numPeersInt = atoi(numPeers);
   for (int i = 0; i < numPeersInt; i++) {
     char* peer = strtok(NULL, "\n");
-    cout << "Peer: " << peer << endl;
     torrentData.peerList.push_back(peer);
   }
-  // get next line
   char* numChunks = strtok(NULL, "\n");
   int numChunksInt = atoi(numChunks);
   for (int i = 0; i < numChunksInt; i++) {
@@ -132,6 +133,22 @@ torrentData parseTorrentFile(char* torrentFile) {
     torrentData.chunkList[i] = chunkHash;
   }
   return torrentData;
+}
+
+void getOwnedChunksFromFile(char* ownedChunks, torrentData &torrentData) {
+  ifstream file(ownedChunks);
+  string line;
+  while (getline(file, line)) {
+    torrentData.ownedChunks.push_back(stoi(line));
+  }
+}
+
+void determineNeededChunks(torrentData &torrentData) {
+  for (unsigned int i = 0; i < torrentData.chunkList.size(); i++) {
+    if (find(torrentData.ownedChunks.begin(), torrentData.ownedChunks.end(), i) == torrentData.ownedChunks.end()) {
+      torrentData.neededChunks.push_back(i);
+    }
+  }
 }
 
 int main(int argc, char* argv[]) 
@@ -145,6 +162,10 @@ int main(int argc, char* argv[])
   requestTorrentFileFromTracker(peerSocket);
   packet torrentFilePacket = receiveTorrentFileFromTracker(peerSocket);
   torrentData torrentData = parseTorrentFile(torrentFilePacket.data);
+
+  // determine which chunks to request
+  getOwnedChunksFromFile(peerArgs.ownedChunks, torrentData);
+  determineNeededChunks(torrentData);
 
   // loop through torrentData.peerlist
   for (unsigned int i = 0; i < torrentData.peerList.size(); i++) {
