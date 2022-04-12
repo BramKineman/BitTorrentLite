@@ -25,6 +25,7 @@
 #define PEERPORT 6881
 #define FILE_CHUNK_SIZE 512000
 #define TORRENT_REQUEST 0
+#define FILE_CHUNK_REQUEST 2
 
 using namespace std; 
 
@@ -59,6 +60,7 @@ struct torrentData {
   map<int, string> chunkList;
   vector<int> ownedChunks;
   vector<int> neededChunks;
+  vector<peerSocketInfo> peerSockets; // client peer sockets
 };
 
 auto retrieveArgs(char* argv[]) {
@@ -162,59 +164,67 @@ void determineNeededChunks(torrentData &torrentData) {
   }
 }
 
-peerServerInfo setupPeerToListen() {
-  peerServerInfo peerToPeerSocket;
+// ALL PEERS DO THIS 
+peerServerInfo setupServerPeerSocket() {
+  peerServerInfo peerServerSocket;
   // create socket
-  peerToPeerSocket.sockfd = socket(AF_INET, SOCK_STREAM, 0);
-  if (peerToPeerSocket.sockfd < 0) {
+  peerServerSocket.sockfd = socket(AF_INET, SOCK_STREAM, 0);
+  if (peerServerSocket.sockfd < 0) {
     perror("ERROR opening socket");
     exit(1);
   }
   // Allow port number to be reused
   int optval = 1;
-  if (setsockopt(peerToPeerSocket.sockfd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval)) < 0) {
+  if (setsockopt(peerServerSocket.sockfd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval)) < 0) {
     perror("ERROR on setsockopt");
     exit(1);
   }
   // Bind socket to PORT 6881
-  peerToPeerSocket.server_len = sizeof(peerToPeerSocket.server_addr);
-  peerToPeerSocket.server_addr.sin_family = AF_INET;
-  peerToPeerSocket.server_addr.sin_addr.s_addr = INADDR_ANY;
-  peerToPeerSocket.server_addr.sin_port = htons((u_short) PEERPORT);
-  if (bind(peerToPeerSocket.sockfd, (struct sockaddr *) &peerToPeerSocket.server_addr, sizeof(peerToPeerSocket.server_addr)) < 0) {
+  peerServerSocket.server_len = sizeof(peerServerSocket.server_addr);
+  peerServerSocket.server_addr.sin_family = AF_INET;
+  peerServerSocket.server_addr.sin_addr.s_addr = INADDR_ANY;
+  peerServerSocket.server_addr.sin_port = htons((u_short) PEERPORT);
+  if (bind(peerServerSocket.sockfd, (struct sockaddr *) &peerServerSocket.server_addr, sizeof(peerServerSocket.server_addr)) < 0) {
     perror("ERROR on binding");
     exit(1);
   }
   // listen for connections
-  if (listen(peerToPeerSocket.sockfd, 5) < 0) {
+  if (listen(peerServerSocket.sockfd, 5) < 0) {
     perror("ERROR on listening");
     exit(1);
   }
-  cout << "Listening for connections" << endl;
-  return peerToPeerSocket;
+  cout << "SERVER SOCKET IS SETUP" << endl;
+  return peerServerSocket;
 }
 
-void acceptPeerConnection(peerServerInfo &peerToPeerSocket) {
-  // Accept incoming connection
-  socklen_t addr_len = sizeof(peerToPeerSocket.sockfd);
-  cout << "Trying to accept incoming connection" << endl;
-  peerToPeerSocket.peerSocketfd = accept(peerToPeerSocket.sockfd, (struct sockaddr*)&peerToPeerSocket.server_addr, &addr_len);
-  if (peerToPeerSocket.peerSocketfd == -1) {
-    cout << "Error accepting incoming connection" << endl;
-    exit(0);
+void handlePeerRequest() {
+  cout << "HANDLING PEER REQUEST" << endl;
+}
+
+void acceptPeerConnection(peerServerInfo &peerServerSocket, vector<string> &peerList) {
+  // Accept peerList - 1 connections
+  int numberOfPeersToAccept = peerList.size() - 1;
+  while (numberOfPeersToAccept != 0) {
+    socklen_t addr_len = sizeof(peerServerSocket.sockfd);
+    cout << "SERVER: Trying to accept incoming connection. There are " << numberOfPeersToAccept << " peers left to accept" << endl;
+    peerServerSocket.peerSocketfd = accept(peerServerSocket.sockfd, (struct sockaddr*)&peerServerSocket.server_addr, &addr_len);
+    if (peerServerSocket.peerSocketfd == -1) {
+      cout << "Error accepting incoming connection" << endl;
+      exit(0);
+    }
+    cout << "SERVER: a client accepted my connection. Creating new thread to handle connection..." << endl;
+    numberOfPeersToAccept--;
+
+    // spawn new thread to handle request
+    thread t1(handlePeerRequest);
+    t1.join(); // detach?
+
+    // immediately go back to accepting connections
   }
-  cout << "I connected to a peer" << endl;
+  cout << "SERVER: All peers accepted!" << endl;
 }
 
-// void requestPeerListFromPeer(peerSocketInfo &peerSocket) {
-//   packet peerListRequest;
-//   peerListRequest.type = PEER_LIST_REQUEST;
-//   peerListRequest.length = 0;
-//   send(peerSocket.sockfd, &peerListRequest, sizeof(peerListRequest), MSG_NOSIGNAL);
-//   cout << "Requested peer list!" << endl;
-// }
-
-peerSocketInfo connectToPeer(char* myIP, const char* peerIP) {
+peerSocketInfo connectToServerPeer(char* myIP, const char* peerIP) {
   peerSocketInfo peerSocket;
   // create socket
   peerSocket.sockfd = socket(AF_INET, SOCK_STREAM, 0);
@@ -222,7 +232,7 @@ peerSocketInfo connectToPeer(char* myIP, const char* peerIP) {
     perror("ERROR opening socket");
     exit(1);
   }
-  // connect to the tracker's binded socket
+  // connect to the peers's binded socket
   peerSocket.server_addr.sin_family = AF_INET;
   peerSocket.server_addr.sin_addr.s_addr = INADDR_ANY;
   peerSocket.server_addr.sin_port = htons((u_short) PEERPORT);
@@ -232,19 +242,31 @@ peerSocketInfo connectToPeer(char* myIP, const char* peerIP) {
     exit(1);
   }
   memcpy(&peerSocket.server_addr.sin_addr, tracker_host->h_addr_list[0], tracker_host->h_length);
-  if (connect(peerSocket.sockfd, (struct sockaddr *) &peerSocket.server_addr, sizeof(peerSocket.server_addr)) < 0) {
-    perror("ERROR connecting");
-    exit(1);
+  cout << "CLIENT: Attempting to connect to peer: " << peerIP << endl;
+  while (connect(peerSocket.sockfd, (struct sockaddr *) &peerSocket.server_addr, sizeof(peerSocket.server_addr)) < 0) {
+    continue;
   }
-  cout << "Connected to tracker" << endl;
-
+  cout << "CLIENT: Server peer " << peerIP << " accepted my connection" << endl;
   return peerSocket;
 }
 
+// void requestFileChunksFromPeer(peerSocketInfo &peerSocket) {
+//   packet fileChunkRequest;
+//   fileChunkRequest.type = FILE_CHUNK_REQUEST;
+//   fileChunkRequest.length = 0;
+//   send(peerSocket.sockfd, &fileChunkRequest, sizeof(fileChunkRequest), MSG_NOSIGNAL);
+//   cout << "Requested file chunks!" << endl;
+// }
+
 void connectToEachPeer(char* myIP, torrentData &torrentData) {
   for (unsigned int i = 0; i < torrentData.peerList.size(); i++) {
-    connectToPeer(myIP, torrentData.peerList[i].c_str());
+    if (myIP != torrentData.peerList[i]) {
+      peerSocketInfo peerSocket = connectToServerPeer(myIP, torrentData.peerList[i].c_str());
+      // save peer socket
+      torrentData.peerSockets.push_back(peerSocket);
+    }
   }
+  cout << "CLIENT: Finished connecting to all peers" << endl;
 }
 
 int main(int argc, char* argv[]) 
@@ -266,21 +288,27 @@ int main(int argc, char* argv[])
   getOwnedChunksFromFile(peerArgs.ownedChunks, torrentData);
   determineNeededChunks(torrentData);
 
-  // connect to each peer 
-  // (ALL ON SAME (BUT NEW?) THREAD))
-  peerServerInfo peerToPeerSocket = setupPeerToListen();
-  thread connectToPeersThread(&connectToEachPeer, ref(peerArgs.myIP), ref(torrentData));
-  connectToPeersThread.join();
-  
-  // ask each peer for its owned chunks <-- Sequential
-  // receive the owned chunks from a peer <-- Threaded
 
   // All outgoing requests can be done sequentially
-  // - requests for asking for chunks
+  // - requests for asking for chunks peer owns
   // - request for actually getting the chunk
 
-  
+  // Must be able to send out requests to other peers while also accepting requests from other peers simultaneously
+
+  // All requests to other peers can occur in one thread (sequential in seperate thread?)
+  // Other threads will be accepting requests from other peers at the same time.
+  // - When accepting requests, each request should be handled simultaneously.
+  // - 1. Accept request. 2. Spawn new thread to handle request 3. Start waiting to accept again
+
+  // setup peer server socket 
+  peerServerInfo peerServerSocket = setupServerPeerSocket();
+  // 1. Accept request, 2. Spawn new thread to handle request 3. Start waiting to accept again
+  thread acceptingPeers(acceptPeerConnection, ref(peerServerSocket), ref(torrentData.peerList));
+  // sequentially connect to each peer
+  connectToEachPeer(peerArgs.myIP, torrentData);
+  acceptingPeers.join();
+
   // close socket
-  close(peerSocket.sockfd);
+  // close(peerSocket.sockfd);
   return 0;
 }
