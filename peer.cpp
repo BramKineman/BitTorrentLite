@@ -25,7 +25,11 @@
 #define PEERPORT 6881
 #define FILE_CHUNK_SIZE 512000
 #define TORRENT_REQUEST 0
-#define FILE_CHUNK_REQUEST 2
+#define TORRENT_RESPONSE 1
+#define CHUNK_LIST_REQUEST 2
+#define CHUNK_LIST_RESPONSE 3
+#define CHUNK_REQUEST 4
+#define HEADER_SIZE sizeof(PacketHeader)
 
 using namespace std; 
 
@@ -38,16 +42,16 @@ struct args {
   char* log;
 };
 
-struct peerSocketInfo {
+struct peerSocketInfo { // client peer info
   int sockfd;
   struct sockaddr_in server_addr;
   socklen_t server_len;
 };
 
-struct peerServerInfo {
+struct peerServerInfo { // server peer info
   int sockfd;
   struct sockaddr_in server_addr;
-  int peerSocketfd;
+  int peerConnectionfd; // returned value from accept - recv from this socket
   socklen_t server_len;
 };
 
@@ -57,10 +61,13 @@ struct packet : public PacketHeader {
 
 struct torrentData {
   vector<string> peerList;
+  vector<string> otherPeers;
   map<int, string> chunkList;
-  vector<int> ownedChunks;
+  char* ownedChunksFile;
+  vector<unsigned int> ownedChunks;
   vector<int> neededChunks;
-  vector<peerSocketInfo> peerSockets; // client peer sockets
+  vector<peerSocketInfo> peerClientSockets; // sockets for SENDING
+  map<char*, char[]> serverPeerOwnedChunks;
 };
 
 auto retrieveArgs(char* argv[]) {
@@ -148,8 +155,8 @@ torrentData parseTorrentFile(char* torrentFile) {
   return torrentData;
 }
 
-void getOwnedChunksFromFile(char* ownedChunks, torrentData &torrentData) {
-  ifstream file(ownedChunks);
+void getOwnedChunksFromFile(torrentData &torrentData) {
+  ifstream file(torrentData.ownedChunksFile);
   string line;
   while (getline(file, line)) {
     torrentData.ownedChunks.push_back(stoi(line));
@@ -164,8 +171,7 @@ void determineNeededChunks(torrentData &torrentData) {
   }
 }
 
-// ALL PEERS DO THIS 
-peerServerInfo setupServerPeerSocket() {
+peerServerInfo setupServerPeerSocketToListen() {
   peerServerInfo peerServerSocket;
   // create socket
   peerServerSocket.sockfd = socket(AF_INET, SOCK_STREAM, 0);
@@ -189,39 +195,70 @@ peerServerInfo setupServerPeerSocket() {
     exit(1);
   }
   // listen for connections
-  if (listen(peerServerSocket.sockfd, 5) < 0) {
+  if (listen(peerServerSocket.sockfd, 5) < 0) { // we allow 5 simultaneous connections in backlog
     perror("ERROR on listening");
     exit(1);
   }
-  cout << "SERVER SOCKET IS SETUP" << endl;
+  cout << "Opened peer server socket..." << endl;
   return peerServerSocket;
 }
 
-void handlePeerRequest() {
-  cout << "HANDLING PEER REQUEST" << endl;
+void peerServerSendChunkListResponse(peerServerInfo &peerServerSocket, torrentData &torrentData) {
+  cout << "SERVER: Received chunk list request from peer" << endl;
+  packet packetToSend;
+  memset(&packetToSend.data, 0, sizeof(packetToSend.data));
+  packetToSend.type = CHUNK_LIST_RESPONSE;
+  // read torrentData.ownedChunks in to packetToSend.data
+  for (unsigned int i = 0; i < torrentData.ownedChunks.size(); i++) {
+    cout << "LOOKING TO SEND: " << torrentData.ownedChunks[i] << endl;
+    cout << "THAT HAS A SIZE OF " << sizeof(torrentData.ownedChunks[i]) << endl;
+    // put chunk number into packetToSend.data
+    memcpy(&packetToSend.data[i * sizeof(torrentData.ownedChunks[i])], &torrentData.ownedChunks[i], sizeof(torrentData.ownedChunks[i]));
+    cout << "I PUT IN !(#$(!@#)): " << packetToSend.data[i * sizeof(torrentData.ownedChunks[i])] << endl;
+  }
+  packetToSend.length = sizeof(packetToSend.data);
+
+  // Send packet
+  ssize_t bytesSent = send(peerServerSocket.peerConnectionfd, &packetToSend, sizeof(packetToSend), MSG_NOSIGNAL);
+  // ssize_t bytesSent = send(peerServerSocket.peerConnectionfd, &packetToSend, HEADER_SIZE + bytesRead, 0);
+  if (bytesSent == -1) {
+    cout << "SERVER: Error sending chunk list file with error: " << strerror(errno) << endl;
+    exit(1);
+  }
+  cout << "SERVER: Sent chunk list file to peer" << endl;
 }
 
-void acceptPeerConnection(peerServerInfo &peerServerSocket, vector<string> &peerList) {
-  // Accept peerList - 1 connections
-  int numberOfPeersToAccept = peerList.size() - 1;
-  while (numberOfPeersToAccept != 0) {
+void peerServerReceiveAndSendData(peerServerInfo &peerServerSocket, torrentData &torrentData) {
+  packet packetToReceive;
+  // memset(&packetToReceive, 0, sizeof(packetToReceive));
+  cout << "SERVER: Attempting to receive data from peer..." << endl;
+  // receive packet
+  recv(peerServerSocket.peerConnectionfd, &packetToReceive, sizeof(packetToReceive), 0); // receive, then send correct thing 
+  if (packetToReceive.type == CHUNK_LIST_REQUEST) {
+    peerServerSendChunkListResponse(peerServerSocket, torrentData);
+  }
+  if (packetToReceive.type == CHUNK_REQUEST) {
+    cout << "Received chunk request from peer" << endl;
+  }
+}
+
+void serverAcceptClientPeerConnection(peerServerInfo &peerServerSocket, torrentData &torrentData) {
+  while (true) { // infinite loop
     socklen_t addr_len = sizeof(peerServerSocket.sockfd);
-    cout << "SERVER: Trying to accept incoming connection. There are " << numberOfPeersToAccept << " peers left to accept" << endl;
-    peerServerSocket.peerSocketfd = accept(peerServerSocket.sockfd, (struct sockaddr*)&peerServerSocket.server_addr, &addr_len);
-    if (peerServerSocket.peerSocketfd == -1) {
+    cout << "SERVER: Trying to accept incoming connection...  " << endl;
+    peerServerSocket.peerConnectionfd = accept(peerServerSocket.sockfd, (struct sockaddr*)&peerServerSocket.server_addr, &addr_len);
+    if (peerServerSocket.peerConnectionfd == -1) {
       cout << "Error accepting incoming connection" << endl;
       exit(0);
     }
-    cout << "SERVER: a client accepted my connection. Creating new thread to handle connection..." << endl;
-    numberOfPeersToAccept--;
+    cout << "SERVER: a client connected to me. Creating new thread to receive data..." << endl;
 
     // spawn new thread to handle request
-    thread t1(handlePeerRequest);
-    t1.join(); // detach?
-
+    thread t1(peerServerReceiveAndSendData, ref(peerServerSocket), ref(torrentData)); // I can recv(peerServerSocket.peerConnectionfd)
+    
+    t1.join(); // TODO: Join elsewhere?
     // immediately go back to accepting connections
   }
-  cout << "SERVER: All peers accepted!" << endl;
 }
 
 peerSocketInfo connectToServerPeer(char* myIP, const char* peerIP) {
@@ -250,23 +287,36 @@ peerSocketInfo connectToServerPeer(char* myIP, const char* peerIP) {
   return peerSocket;
 }
 
-// void requestFileChunksFromPeer(peerSocketInfo &peerSocket) {
-//   packet fileChunkRequest;
-//   fileChunkRequest.type = FILE_CHUNK_REQUEST;
-//   fileChunkRequest.length = 0;
-//   send(peerSocket.sockfd, &fileChunkRequest, sizeof(fileChunkRequest), MSG_NOSIGNAL);
-//   cout << "Requested file chunks!" << endl;
-// }
+void clientReceiveFileChunkListFromServerPeer(peerSocketInfo &peerSocket) {
+  packet fileChunkResponse;
+  recv(peerSocket.sockfd, &fileChunkResponse, sizeof(fileChunkResponse), 0);
+  if (fileChunkResponse.type == CHUNK_LIST_RESPONSE) {
+    cout << "CLIENT: **** Received file chunk list from peer with data: " << endl << fileChunkResponse.data << endl;
+    cout << "That data is " << fileChunkResponse.length << " bytes long" << endl;
+  }
+  // do orderly shutdown
+  shutdown(peerSocket.sockfd, SHUT_RDWR);
+}
 
-void connectToEachPeer(char* myIP, torrentData &torrentData) {
+void clientRequestFileChunkListFromServerPeer(peerSocketInfo &peerSocket, torrentData &torrentData, const char* serverIP) {
+  PacketHeader fileChunkRequest;
+  fileChunkRequest.type = CHUNK_LIST_REQUEST;
+  fileChunkRequest.length = 0;
+  cout << "CLIENT: Requesting file chunk list from peer..." << endl;
+  unsigned int bytes = send(peerSocket.sockfd, &fileChunkRequest, sizeof(fileChunkRequest), MSG_NOSIGNAL);
+  cout << "CLIENT: Requested file chunk from peer..." << endl;
+  clientReceiveFileChunkListFromServerPeer(peerSocket);
+}
+
+void connectToEachServerPeerAndRequest(char* myIP, torrentData &torrentData) {
   for (unsigned int i = 0; i < torrentData.peerList.size(); i++) {
     if (myIP != torrentData.peerList[i]) {
-      peerSocketInfo peerSocket = connectToServerPeer(myIP, torrentData.peerList[i].c_str());
-      // save peer socket
-      torrentData.peerSockets.push_back(peerSocket);
+      peerSocketInfo clientSocketInfo = connectToServerPeer(myIP, torrentData.peerList[i].c_str());
+      torrentData.peerClientSockets.push_back(clientSocketInfo);
+      clientRequestFileChunkListFromServerPeer(clientSocketInfo, torrentData, torrentData.peerList[i].c_str());
     }
   }
-  cout << "CLIENT: Finished connecting to all peers" << endl;
+  cout << "*** CLIENT: Finished connecting to all peers ***" << endl;
 }
 
 int main(int argc, char* argv[]) 
@@ -283,32 +333,28 @@ int main(int argc, char* argv[])
   shutdown(peerSocket.sockfd, SHUT_RDWR);
 
   torrentData torrentData = parseTorrentFile(torrentFilePacket.data);
+  torrentData.ownedChunksFile = peerArgs.ownedChunks;
 
   // determine which chunks to request
-  getOwnedChunksFromFile(peerArgs.ownedChunks, torrentData);
+  getOwnedChunksFromFile(torrentData);
   determineNeededChunks(torrentData);
-
 
   // All outgoing requests can be done sequentially
   // - requests for asking for chunks peer owns
   // - request for actually getting the chunk
 
-  // Must be able to send out requests to other peers while also accepting requests from other peers simultaneously
-
-  // All requests to other peers can occur in one thread (sequential in seperate thread?)
-  // Other threads will be accepting requests from other peers at the same time.
-  // - When accepting requests, each request should be handled simultaneously.
-  // - 1. Accept request. 2. Spawn new thread to handle request 3. Start waiting to accept again
-
   // setup peer server socket 
-  peerServerInfo peerServerSocket = setupServerPeerSocket();
+  peerServerInfo peerServerSocket = setupServerPeerSocketToListen();
   // 1. Accept request, 2. Spawn new thread to handle request 3. Start waiting to accept again
-  thread acceptingPeers(acceptPeerConnection, ref(peerServerSocket), ref(torrentData.peerList));
-  // sequentially connect to each peer
-  connectToEachPeer(peerArgs.myIP, torrentData);
-  acceptingPeers.join();
+  thread acceptingPeers(serverAcceptClientPeerConnection, ref(peerServerSocket), ref(torrentData));
 
-  // close socket
-  // close(peerSocket.sockfd);
+  // sequentially connect to each peer
+  connectToEachServerPeerAndRequest(peerArgs.myIP, torrentData);
+
+  // output torrent data server peers owned chunks
+
+
+  // KEEP PEER RUNNING
+  acceptingPeers.join();
   return 0;
 }
