@@ -17,6 +17,8 @@
 #include <thread>
 #include <pthread.h>
 #include <mutex>
+#include <list>
+#include <utility>
 
 #include "PacketHeader.h"
 #include "crc32.h"
@@ -29,6 +31,7 @@
 #define CHUNK_LIST_REQUEST 2
 #define CHUNK_LIST_RESPONSE 3
 #define CHUNK_REQUEST 4
+#define UNSIGNED_INT_SIZE 4
 #define HEADER_SIZE sizeof(PacketHeader)
 
 using namespace std; 
@@ -53,6 +56,7 @@ struct peerServerInfo { // server peer info
   struct sockaddr_in server_addr;
   int peerConnectionfd; // returned value from accept - recv from this socket
   socklen_t server_len;
+
 };
 
 struct packet : public PacketHeader {
@@ -65,9 +69,10 @@ struct torrentData {
   map<int, string> chunkList;
   char* ownedChunksFile;
   vector<unsigned int> ownedChunks;
-  vector<int> neededChunks;
+  vector<unsigned int> neededChunks;
   vector<peerSocketInfo> peerClientSockets; // sockets for SENDING
-  map<char*, char[]> serverPeerOwnedChunks;
+  vector<vector<unsigned int>> peersOwnedChunks; // list of chunks owned by each peer, index corresponds to peerClientSockets index
+  vector<pair<peerSocketInfo, vector<unsigned int>>> serverPeerOwnedChunks;
 };
 
 auto retrieveArgs(char* argv[]) {
@@ -208,19 +213,13 @@ void peerServerSendChunkListResponse(peerServerInfo &peerServerSocket, torrentDa
   packet packetToSend;
   memset(&packetToSend.data, 0, sizeof(packetToSend.data));
   packetToSend.type = CHUNK_LIST_RESPONSE;
-  // read torrentData.ownedChunks in to packetToSend.data
+  // memcpy each chunk number into packetToSend.data
   for (unsigned int i = 0; i < torrentData.ownedChunks.size(); i++) {
-    cout << "LOOKING TO SEND: " << torrentData.ownedChunks[i] << endl;
-    cout << "THAT HAS A SIZE OF " << sizeof(torrentData.ownedChunks[i]) << endl;
-    // put chunk number into packetToSend.data
-    memcpy(&packetToSend.data[i * sizeof(torrentData.ownedChunks[i])], &torrentData.ownedChunks[i], sizeof(torrentData.ownedChunks[i]));
-    cout << "I PUT IN !(#$(!@#)): " << packetToSend.data[i * sizeof(torrentData.ownedChunks[i])] << endl;
+    memcpy(&packetToSend.data[i * UNSIGNED_INT_SIZE], (char*)&torrentData.ownedChunks[i], UNSIGNED_INT_SIZE);
   }
-  packetToSend.length = sizeof(packetToSend.data);
-
+  packetToSend.length = (UNSIGNED_INT_SIZE * (torrentData.ownedChunks.size()));
   // Send packet
-  ssize_t bytesSent = send(peerServerSocket.peerConnectionfd, &packetToSend, sizeof(packetToSend), MSG_NOSIGNAL);
-  // ssize_t bytesSent = send(peerServerSocket.peerConnectionfd, &packetToSend, HEADER_SIZE + bytesRead, 0);
+  ssize_t bytesSent = send(peerServerSocket.peerConnectionfd, &packetToSend, packetToSend.length + HEADER_SIZE, MSG_NOSIGNAL);
   if (bytesSent == -1) {
     cout << "SERVER: Error sending chunk list file with error: " << strerror(errno) << endl;
     exit(1);
@@ -255,7 +254,6 @@ void serverAcceptClientPeerConnection(peerServerInfo &peerServerSocket, torrentD
 
     // spawn new thread to handle request
     thread t1(peerServerReceiveAndSendData, ref(peerServerSocket), ref(torrentData)); // I can recv(peerServerSocket.peerConnectionfd)
-    
     t1.join(); // TODO: Join elsewhere?
     // immediately go back to accepting connections
   }
@@ -287,14 +285,20 @@ peerSocketInfo connectToServerPeer(char* myIP, const char* peerIP) {
   return peerSocket;
 }
 
-void clientReceiveFileChunkListFromServerPeer(peerSocketInfo &peerSocket) {
+void clientReceiveFileChunkListFromServerPeer(peerSocketInfo &peerSocket, torrentData &torrentData) {
   packet fileChunkResponse;
+  vector<unsigned int> fileChunkList;
   recv(peerSocket.sockfd, &fileChunkResponse, sizeof(fileChunkResponse), 0);
   if (fileChunkResponse.type == CHUNK_LIST_RESPONSE) {
-    cout << "CLIENT: **** Received file chunk list from peer with data: " << endl << fileChunkResponse.data << endl;
-    cout << "That data is " << fileChunkResponse.length << " bytes long" << endl;
+    cout << "CLIENT: Received chunk list response from server peer" << endl;
+    for (unsigned int i = 0; i <= (fileChunkResponse.length-1); i += UNSIGNED_INT_SIZE) { 
+      unsigned int chunkNumber;
+      memcpy(&chunkNumber, &fileChunkResponse.data[i], UNSIGNED_INT_SIZE);
+      fileChunkList.push_back(chunkNumber);
+    }
   }
-  // do orderly shutdown
+  pair<peerSocketInfo, vector<unsigned int>> newPair = make_pair(peerSocket, fileChunkList);
+  torrentData.serverPeerOwnedChunks.push_back(newPair);
   shutdown(peerSocket.sockfd, SHUT_RDWR);
 }
 
@@ -303,9 +307,9 @@ void clientRequestFileChunkListFromServerPeer(peerSocketInfo &peerSocket, torren
   fileChunkRequest.type = CHUNK_LIST_REQUEST;
   fileChunkRequest.length = 0;
   cout << "CLIENT: Requesting file chunk list from peer..." << endl;
-  unsigned int bytes = send(peerSocket.sockfd, &fileChunkRequest, sizeof(fileChunkRequest), MSG_NOSIGNAL);
-  cout << "CLIENT: Requested file chunk from peer..." << endl;
-  clientReceiveFileChunkListFromServerPeer(peerSocket);
+  send(peerSocket.sockfd, &fileChunkRequest, sizeof(fileChunkRequest), MSG_NOSIGNAL);
+  cout << "CLIENT: Requested file chunk list from peer..." << endl;
+  clientReceiveFileChunkListFromServerPeer(peerSocket, torrentData);
 }
 
 void connectToEachServerPeerAndRequest(char* myIP, torrentData &torrentData) {
