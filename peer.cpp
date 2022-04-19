@@ -312,12 +312,28 @@ void clientRequestFileChunkListFromServerPeer(peerSocketInfo &peerSocket, torren
   clientReceiveFileChunkListFromServerPeer(peerSocket, torrentData);
 }
 
-void connectToEachServerPeerAndRequest(char* myIP, torrentData &torrentData) {
-  for (unsigned int i = 0; i < torrentData.peerList.size(); i++) {
-    if (myIP != torrentData.peerList[i]) {
-      peerSocketInfo clientSocketInfo = connectToServerPeer(myIP, torrentData.peerList[i].c_str());
-      torrentData.peerClientSockets.push_back(clientSocketInfo);
-      clientRequestFileChunkListFromServerPeer(clientSocketInfo, torrentData, torrentData.peerList[i].c_str());
+map<unsigned int, unsigned int> getChunkMap(torrentData &torrentData) {
+  map<unsigned int, unsigned int> chunkCount; // chunk number, count
+  for (unsigned int i = 0; i < torrentData.serverPeerOwnedChunks.size(); i++) {
+    for (unsigned int j = 0; j < torrentData.serverPeerOwnedChunks[i].second.size(); j++) {
+      // only consider chunk if it is not in the ownedChunks vector
+      if (find(torrentData.ownedChunks.begin(), torrentData.ownedChunks.end(), torrentData.serverPeerOwnedChunks[i].second[j]) == torrentData.ownedChunks.end()) {
+        chunkCount[torrentData.serverPeerOwnedChunks[i].second[j]]++;
+      }
+    }
+  }
+  return chunkCount;
+}
+
+void connectToEachServerPeerAndRequest(char* myIP, torrentData &torrentData, bool receivedChunkList) {
+
+  if (!receivedChunkList) {
+    for (unsigned int i = 0; i < torrentData.peerList.size(); i++) {
+      if (myIP != torrentData.peerList[i]) {
+        peerSocketInfo clientSocketInfo = connectToServerPeer(myIP, torrentData.peerList[i].c_str());
+        torrentData.peerClientSockets.push_back(clientSocketInfo);
+        clientRequestFileChunkListFromServerPeer(clientSocketInfo, torrentData, torrentData.peerList[i].c_str());
+      }
     }
   }
   cout << "*** CLIENT: Finished connecting to all peers ***" << endl;
@@ -352,13 +368,22 @@ int main(int argc, char* argv[])
   // 1. Accept request, 2. Spawn new thread to handle request 3. Start waiting to accept again
   thread acceptingPeers(serverAcceptClientPeerConnection, ref(peerServerSocket), ref(torrentData));
 
+  bool receivedChunkList = false;
   // sequentially connect to each peer
-  connectToEachServerPeerAndRequest(peerArgs.myIP, torrentData);
+  connectToEachServerPeerAndRequest(peerArgs.myIP, torrentData, receivedChunkList);
+  receivedChunkList = true;
 
-  // output torrent data server peers owned chunks
+  // Map contains <chunk number, count> of chunks owned by peers
+  map<unsigned int, unsigned int> chunkMap = getChunkMap(torrentData);
+
+  // output chunk count map
+  cout << "*** CLIENT: Chunk count map ***" << endl;
+  for (auto it = chunkMap.begin(); it != chunkMap.end(); it++) {
+    cout << it->first << ": " << it->second << endl;
+  }
 
 
-  // KEEP PEER RUNNING
+  // TODO: KEEP PEER RUNNING
   acceptingPeers.join();
   return 0;
 }
