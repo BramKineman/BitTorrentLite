@@ -75,7 +75,7 @@ void readInputFileToTorrentFile(char* &inputFile, char* &torrentFile) {
   while (!inputFileStream.eof()) {
     inputFileStream.read(buffer, FILE_CHUNK_SIZE);
     // run crc32 on the chunk
-    unsigned int crc = crc32(buffer, FILE_CHUNK_SIZE);
+    unsigned int crc = crc32(buffer, inputFileStream.gcount());
     // form string with chunk number and crc
     string chunkString = to_string(chunk) + " " + to_string(crc) + "\n";
     fileChunks.push_back(chunkString);
