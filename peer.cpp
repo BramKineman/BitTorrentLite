@@ -81,7 +81,8 @@ struct torrentData {
   vector<peerSocketInfo> peerClientSockets; // sockets for SENDING
   vector<pair<const char *, vector<unsigned int>>> serverPeerOwnedChunks; // list [ pairs [IP, vector of chunks] ]
   map<unsigned int, unsigned int> nonOwnedChunksAndOccurrences; // <chunk, occurences> for non-owned chunks
-  map<unsigned int, data> finalChunkData; // <chunk, data> for newly-owned chunks
+  map<unsigned int, data> finalChunkData; // <chunk, data> for newly-owned chunks, preloaded with owned chunks
+  map<unsigned int, unsigned int> chunkAndSize; // <chunk, size> for chunks
 };
 
 auto retrieveArgs(char* argv[]) {
@@ -193,6 +194,7 @@ void readOwnedChunksIntoTorrentData(torrentData &torrentData) {
     data chunkDataStruct;
     memcpy(chunkDataStruct.data, chunkData, FILE_CHUNK_SIZE);
     torrentData.finalChunkData.insert(pair<unsigned int, data>(torrentData.ownedChunks[i], chunkDataStruct));
+    torrentData.chunkAndSize.insert(pair<unsigned int, unsigned int>(torrentData.ownedChunks[i], file.gcount()));
   }
 }
 
@@ -319,8 +321,7 @@ void peerServerReceiveAndSendData(peerServerInfo &peerServerSocket, torrentData 
   }
 }
 
-void serverAcceptClientPeerConnection(peerServerInfo &peerServerSocket, torrentData &torrentData) {
-  thread t1;
+void serverAcceptClientPeerConnection(peerServerInfo &peerServerSocket, torrentData &torrentData, vector<thread> &threads) {
   while (true) { // infinite loop
     socklen_t addr_len = sizeof(peerServerSocket.sockfd);
     cout << "SERVER: Trying to accept incoming connection...  " << endl;
@@ -330,11 +331,13 @@ void serverAcceptClientPeerConnection(peerServerInfo &peerServerSocket, torrentD
       exit(0);
     }
     cout << "SERVER: a client connected to me. Creating new thread to receive data..." << endl;
-
     // spawn new thread to handle request
-    t1 = thread(peerServerReceiveAndSendData, ref(peerServerSocket), ref(torrentData)); // I can recv(peerServerSocket.peerConnectionfd)
-    t1.join(); // TODO: Join elsewhere? - waits here - try detach
+    threads.push_back(thread(peerServerReceiveAndSendData, ref(peerServerSocket), ref(torrentData)));
     // immediately go back to accepting connections
+  }
+  // join all threads
+  for (unsigned int i = 0; i < threads.size(); i++) {
+    threads[i].join();
   }
 }
 
@@ -411,6 +414,7 @@ void clientReceiveFileChunkFromServerPeer(peerSocketInfo &peerSocket, torrentDat
       memset(chunkData.data, 0, sizeof(chunkData.data));
       memcpy(chunkData.data, fileChunkResponse.data, fileChunkResponse.length);
       torrentData.finalChunkData.insert(pair<unsigned int, data>(chunkNum, chunkData));
+      torrentData.chunkAndSize.insert(pair<unsigned int, unsigned int>(chunkNum, fileChunkResponse.length));
     } else { 
       cout << "#### CLIENT: Received chunk " << chunkNum << " from server peer but received CRC " << receivedDataCRC << " does not match real CRC " << chunkCRCFromTorrentFile << endl;
     }
@@ -518,13 +522,14 @@ void readTorrentDataChunksToOutputFile(torrentData &torrentData) {
   cout << "CLIENT: *** Writing to output file ***" << endl;
   // write the final chunk data to the output file
   ofstream outputFile;
-  outputFile.open(torrentData.outputFile, ios::out | ios::binary);
+  outputFile.open(torrentData.outputFile, ios::out | ios::binary | ios::app); // appending
   //map<unsigned int, data> finalChunkData
   for (unsigned int i = 0; i < torrentData.finalChunkData.size(); i++) {
     size_t before = outputFile.tellp();
+    cout << "Writing chunk " << i << " which is size " << torrentData.chunkAndSize[i] << endl;
     cout << "Starting at position: " << before << endl;
-    cout << "Writing chunk " << i << " which is size " << sizeof(torrentData.finalChunkData[i]) << endl;
-    outputFile.write(torrentData.finalChunkData[i].data, sizeof(torrentData.finalChunkData[i].data));
+    //outputFile.write(torrentData.finalChunkData[i].data, sizeof(torrentData.finalChunkData[i].data));
+    outputFile.write(torrentData.finalChunkData[i].data, torrentData.chunkAndSize[i]);
     size_t after = outputFile.tellp();
     cout << "Finished writing at position: " << after << " for a difference of " << after - before << endl;
   }
@@ -559,8 +564,9 @@ int main(int argc, char* argv[])
   peerServerInfo peerServerSocket = setupServerPeerSocketToListen();
 
   // 1. Accept request, 2. Spawn new thread to handle request 3. Start waiting to accept again
-  thread acceptingPeers(serverAcceptClientPeerConnection, ref(peerServerSocket), ref(torrentData)); //, ref(testThread)
-
+  vector<thread> threads;
+  thread acceptingPeers(serverAcceptClientPeerConnection, ref(peerServerSocket), ref(torrentData), ref(threads));
+  
   // sequentially connect to each peer for chunk list
   bool receivedChunkList = false;
   connectToEachServerPeerAndRequest(peerArgs.myIP, torrentData, receivedChunkList);
@@ -579,7 +585,7 @@ int main(int argc, char* argv[])
 
   readTorrentDataChunksToOutputFile(torrentData);
   // TODO: KEEP PEER RUNNING
-  cout << "DONE" << endl;
+  cout << "*************** DONE ***************" << endl;
   acceptingPeers.join();
   return 0;
 }
