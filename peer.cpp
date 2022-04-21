@@ -38,6 +38,8 @@
 
 using namespace std; 
 
+std::mutex loggingMutex;
+
 struct args {
   char* myIP;
   char* trackerIP;
@@ -141,6 +143,7 @@ packet receiveTorrentFileFromTracker(peerSocketInfo &peerSocket) {
   packet torrentFile;
   // clear torrentFile.data buffer
   memset(&torrentFile.data, 0, sizeof(torrentFile.data));
+  cout << "Receiving torrent file from tracker..." << endl;
   int bytesReceived = recv(peerSocket.sockfd, &torrentFile, sizeof(torrentFile), 0);
   if (bytesReceived < 0) {
     perror("ERROR receiving data");
@@ -280,17 +283,19 @@ void peerServerSendChunkResponse(peerServerInfo &peerServerSocket, torrentData &
       // can only read from the portion of file that is owned
       ifstream file(torrentData.inputFile, ios::binary);
       file.seekg(chunkNum * FILE_CHUNK_SIZE);
+      cout << "SERVER: Starting to read at file position " << chunkNum * FILE_CHUNK_SIZE << " which should be " << file.tellg() << endl;
       file.read(packetToSend.data, FILE_CHUNK_SIZE); // read full chunk size or until EOF
       file.close();
+      packetToSend.length = file.gcount(); // Should be amount of bytes read
+
+      unsigned int chunkCRC = crc32(packetToSend.data, file.gcount());
 
       // output bytes read
       cout << "SERVER: Read " << file.gcount() << " bytes from file" << endl;  
 
       // compute CRC of chunk
-      unsigned int chunkCRC = crc32(packetToSend.data, file.gcount());
-      cout << "SERVER: I am sending chunk " << chunkNum << " that has a srver computed CRC of " << chunkCRC << endl;
-      
-      packetToSend.length = file.gcount(); // Should be amount of bytes read
+      cout << "SERVER: I am sending chunk " << chunkNum << " that has a server computed CRC of " << chunkCRC << endl;
+      cout << "SERVER: The length of the packet I am sending is " << packetToSend.length << " and the length of the total packet is " << packetToSend.length + HEADER_SIZE << endl;
 
       cout << "SERVER: Sending chunk to peer" << endl; 
       ssize_t bytesSent = send(peerServerSocket.peerConnectionfd, &packetToSend, packetToSend.length + HEADER_SIZE, MSG_DONTWAIT);
@@ -399,11 +404,14 @@ void clientRequestFileChunkListFromServerPeer(peerSocketInfo &peerSocket, torren
 void clientReceiveFileChunkFromServerPeer(peerSocketInfo &peerSocket, torrentData &torrentData, unsigned int chunkCRCFromTorrentFile, unsigned int chunkNum) {
   packet fileChunkResponse;
   cout << "CLIENT: Attempting to receive file chunk from peer..." << endl;
-  recv(peerSocket.sockfd, &fileChunkResponse, sizeof(fileChunkResponse), 0); // wait all?
+  // recv(peerSocket.sockfd, &fileChunkResponse, sizeof(fileChunkResponse), 0); // wait all? two receives for type 1 3 5? all receives for all wait all
+  recv(peerSocket.sockfd, &fileChunkResponse, HEADER_SIZE, MSG_WAITALL);
+  cout << "I AM GOING TO RECEIVE A LENGHT OF " << fileChunkResponse.length << endl;
   if (fileChunkResponse.type == CHUNK_RESPONSE) {
     // compute CRC of chunk received
     unsigned int receivedDataCRC = crc32(fileChunkResponse.data, fileChunkResponse.length); // computing CRC with length of data
 
+    cout << endl << "CLIENT: Received file chunk packet data has size of " << fileChunkResponse.length << " bytes and the total packet size is " << sizeof(fileChunkResponse) << " bytes" << endl;
     cout << endl;
     cout << "CLIENT: Received CRC: " << receivedDataCRC << " for chunk: " << chunkNum << endl;
     cout << "CLIENT: Correct CRC: " << chunkCRCFromTorrentFile << endl;
@@ -429,7 +437,7 @@ void clientRequestFileChunkFromServerPeer(peerSocketInfo &peerSocket, torrentDat
   fileChunkRequest.length = UNSIGNED_INT_SIZE;
   memcpy(&fileChunkRequest.data[0], &chunkCRCFromTorrentFile, UNSIGNED_INT_SIZE);
   cout << "CLIENT: Requesting file chunk from peer..." << endl;
-  send(peerSocket.sockfd, &fileChunkRequest, sizeof(fileChunkRequest), MSG_DONTWAIT); 
+  send(peerSocket.sockfd, &fileChunkRequest, sizeof(fileChunkRequest), MSG_DONTWAIT); // TODO: change to MSG_NOSIGNAL for all sends
   cout << "CLIENT: Requested file chunk from peer..." << endl;
   clientReceiveFileChunkFromServerPeer(peerSocket, torrentData, chunkCRCFromTorrentFile, chunkNumber);
 }

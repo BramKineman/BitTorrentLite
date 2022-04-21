@@ -15,13 +15,20 @@
 #include <thread>
 #include <pthread.h>
 #include <mutex>
+#include <sys/ioctl.h>
+#include <net/if.h>
+#include <netinet/in.h>
 
 #include "PacketHeader.h"
 #include "crc32.h"
 
 #define FILE_CHUNK_SIZE 512000
 #define PORT 6969
+#define TORRENT_REQUEST 0
+#define TORRENT_RESPONSE 1
 #define HEADER_SIZE sizeof(PacketHeader)
+
+std::mutex loggingMutex;
 
 using namespace std; 
 
@@ -49,6 +56,13 @@ auto retrieveArgs(char* argv[]) {
   newArgs.torrentFile = argv[3];
   newArgs.log = argv[4];
   return newArgs;
+}
+
+void writeToLogFile(char* logFile, char* iPAddress, char* packetType, char* packetLength) {
+  ofstream logFileStream;
+  logFileStream.open(logFile, ios::app);
+  logFileStream << iPAddress << " " << packetType << " " << packetLength << endl;
+  logFileStream.close();
 }
 
 void readPeerListToTorrentFile(char* &peerListPath, char* &torrentFile, vector<string> &peerList) {
@@ -123,7 +137,7 @@ trackerSocketInfo setupTrackerToListen() {
 void sendTorrentFile(int sockfd, char* torrentFile) {
   packet packetToSend;
   memset(packetToSend.data, 0, sizeof(packetToSend.data));
-  packetToSend.type = 1;
+  packetToSend.type = TORRENT_RESPONSE;
   // Open torrent file
   ifstream torrentFileStream(torrentFile, ios::binary);
   // Read torrent file into packet
@@ -151,8 +165,10 @@ void receiveDataAndRespond(int sockfd, args trackerArgs) {
     exit(0);
   }
   
-  if (p.type == 0) {
+  if (p.type == TORRENT_REQUEST) {
     cout << "Received torrent request packet" << endl;
+    // write to log file
+    // writeToLogFile(trackerArgs.log, inet_ntoa(p.client_addr.sin_addr), "0", to_string(p.length));
     // send torrent file
     sendTorrentFile(sockfd, trackerArgs.torrentFile);
   }
@@ -168,7 +184,6 @@ void acceptPeerConnection(trackerSocketInfo &trackerSocket, args &trackerArgs) {
     exit(0);
   }
   cout << "I connected to a peer" << endl;
-
   receiveDataAndRespond(trackerSocket.peerSocketfd, trackerArgs);
 }
 
@@ -185,15 +200,17 @@ int main(int argc, char* argv[]) {
 
   trackerSocketInfo trackerSocket = setupTrackerToListen();
   
+  vector<thread> threads;
   unsigned int peersConnected = 0;
   while (peersConnected < peerList.size()) {
-    thread t(&acceptPeerConnection, ref(trackerSocket), ref(trackerArgs));
-    t.join();
+    threads.push_back(thread(&acceptPeerConnection, ref(trackerSocket), ref(trackerArgs)));
     peersConnected++;
   }
 
-  // acceptPeerConnection(trackerSocket);
-  // receiveDataAndRespond(trackerSocket.peerSocketfd, trackerArgs);
+  // Join threads
+  for (unsigned int i = 0; i < threads.size(); i++) {
+    threads[i].join();
+  }
   
   close(trackerSocket.sockfd);
   return 0;
