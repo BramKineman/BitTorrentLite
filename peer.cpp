@@ -265,32 +265,34 @@ void peerServerSendChunkListResponse(peerServerInfo &peerServerSocket, torrentDa
   cout << "SERVER: Sent chunk list file to peer" << endl;
 }
 
-void peerServerSendChunkResponse(peerServerInfo &peerServerSocket, torrentData &torrentData, unsigned int chunkCRC) {
+void peerServerSendChunkResponse(peerServerInfo &peerServerSocket, torrentData &torrentData, unsigned int requestedChunkCRC) {
   int chunkNum;
   bool chunkFound = false;
   // search for chunk in chunkList
   for (unsigned int i = 0; i < torrentData.chunkList.size(); i++) {
-    if (torrentData.chunkList[i] == chunkCRC) { // if CRC exists
+    if (torrentData.chunkList[i] == requestedChunkCRC) { // if CRC exists
       chunkFound = true;
       chunkNum = i;
-      cout << "SERVER: Received chunk request for chunk " << chunkNum << endl;
-      // read from torrentData.inputFile starting at chunkNum * FILE_CHUNK_SIZE
-      // send chunk
-      char chunk[FILE_CHUNK_SIZE];
-      memset(chunk, 0, sizeof(chunk));
-      ifstream file(torrentData.inputFile);
-      file.seekg(chunkNum * FILE_CHUNK_SIZE);
-      // read full chunk size or until EOF
-      file.read(chunk, FILE_CHUNK_SIZE);
-      // output bytes read
-      cout << "SERVER: Read " << file.gcount() << " bytes from file" << endl;
-      file.close();
+      cout << "SERVER: Received chunk request for chunk " << chunkNum << " with CRC " << requestedChunkCRC << endl;
+
       packet packetToSend;
-      memset(&packetToSend.data, 0, sizeof(packetToSend.data));
       packetToSend.type = CHUNK_RESPONSE;
-      memcpy(&packetToSend.data[0], chunk, FILE_CHUNK_SIZE);
-      packetToSend.length = file.gcount(); // what if at the end of file? Should be amount of bytes read
-      cout << "SERVER: I found the requested chunk. Sending chunk to peer" << endl; 
+      // can only read from the portion of file that is owned
+      ifstream file(torrentData.inputFile, ios::binary);
+      file.seekg(chunkNum * FILE_CHUNK_SIZE);
+      file.read(packetToSend.data, FILE_CHUNK_SIZE); // read full chunk size or until EOF
+      file.close();
+
+      // output bytes read
+      cout << "SERVER: Read " << file.gcount() << " bytes from file" << endl;  
+
+      // compute CRC of chunk
+      unsigned int chunkCRC = crc32(packetToSend.data, file.gcount());
+      cout << "SERVER: I am sending chunk " << chunkNum << " that has a srver computed CRC of " << chunkCRC << endl;
+      
+      packetToSend.length = file.gcount(); // Should be amount of bytes read
+
+      cout << "SERVER: Sending chunk to peer" << endl; 
       ssize_t bytesSent = send(peerServerSocket.peerConnectionfd, &packetToSend, packetToSend.length + HEADER_SIZE, MSG_DONTWAIT);
       if (bytesSent == -1) {
         cout << "SERVER: Error sending chunk with error: " << strerror(errno) << endl;
@@ -301,7 +303,7 @@ void peerServerSendChunkResponse(peerServerInfo &peerServerSocket, torrentData &
     }
   }
   if (!chunkFound) {
-    cout << "SERVER: XXXXXXXXXXXX Didn't find a matching chunk for requested CRC: " << chunkCRC << " XXXXXXXXXXXXXXXXXXX" << endl;
+    cout << "SERVER: XXXXXXXXXXXX Didn't find a matching chunk for requested CRC: " << requestedChunkCRC << " XXXXXXXXXXXXXXXXXXX" << endl;
   }
 }
 
@@ -317,7 +319,6 @@ void peerServerReceiveAndSendData(peerServerInfo &peerServerSocket, torrentData 
   if (packetToReceive.type == CHUNK_REQUEST) {
     unsigned int chunkCRC = 0;
     memcpy(&chunkCRC, &packetToReceive.data[0], UNSIGNED_INT_SIZE);
-    cout << "SERVER: Received request for chunk: " << chunkCRC << endl;
     peerServerSendChunkResponse(peerServerSocket, torrentData, chunkCRC);
   }
 }
@@ -400,15 +401,8 @@ void clientReceiveFileChunkFromServerPeer(peerSocketInfo &peerSocket, torrentDat
   cout << "CLIENT: Attempting to receive file chunk from peer..." << endl;
   recv(peerSocket.sockfd, &fileChunkResponse, sizeof(fileChunkResponse), 0); // wait all?
   if (fileChunkResponse.type == CHUNK_RESPONSE) {
-    // get chunk from master file
-    char chunk[FILE_CHUNK_SIZE];
-    memset(chunk, 0, sizeof(chunk));
-    ifstream file(torrentData.inputFile);
-    file.seekg(chunkNum * FILE_CHUNK_SIZE);
-    file.read(chunk, fileChunkResponse.length); // what if at the end of file?
-    file.close();
-    // compute CRC of chunk
-    unsigned int receivedDataCRC = crc32(chunk, fileChunkResponse.length);
+    // compute CRC of chunk received
+    unsigned int receivedDataCRC = crc32(fileChunkResponse.data, fileChunkResponse.length); // computing CRC with length of data
 
     cout << endl;
     cout << "CLIENT: Received CRC: " << receivedDataCRC << " for chunk: " << chunkNum << endl;
