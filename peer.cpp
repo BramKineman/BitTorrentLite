@@ -125,15 +125,15 @@ peerSocketInfo connectToTracker(char* myIP, char* trackerIP) {
   return peerSocket;
 }
 
-packet createTorrentRequestPacket() {
-  packet torrentRequest;
+PacketHeader createTorrentRequestPacket() {
+  PacketHeader torrentRequest;
   torrentRequest.type = TORRENT_REQUEST;
   torrentRequest.length = 0;
   return torrentRequest;
 }
 
 void requestTorrentFileFromTracker(peerSocketInfo &peerSocket) {
-  packet torrentRequest = createTorrentRequestPacket();
+  PacketHeader torrentRequest = createTorrentRequestPacket();
   cout << "Requesting torrent file with type " << torrentRequest.type << endl;
   send(peerSocket.sockfd, &torrentRequest, sizeof(torrentRequest), MSG_NOSIGNAL);
   cout << "Requested!" << endl;
@@ -144,11 +144,18 @@ packet receiveTorrentFileFromTracker(peerSocketInfo &peerSocket) {
   // clear torrentFile.data buffer
   memset(&torrentFile.data, 0, sizeof(torrentFile.data));
   cout << "Receiving torrent file from tracker..." << endl;
-  int bytesReceived = recv(peerSocket.sockfd, &torrentFile, sizeof(torrentFile), 0);
+  // int bytesReceived = recv(peerSocket.sockfd, &torrentFile, sizeof(torrentFile), 0);
+  int bytesReceived = recv(peerSocket.sockfd, &torrentFile, HEADER_SIZE, MSG_WAITALL);
   if (bytesReceived < 0) {
     perror("ERROR receiving data");
     exit(1);
   }
+  bytesReceived = recv(peerSocket.sockfd, &torrentFile.data, torrentFile.length, MSG_WAITALL);
+  if (bytesReceived < 0) {
+    perror("ERROR receiving data");
+    exit(1);
+  }
+
   cout << "Received torrent file" << endl;
   cout << "With data: " << endl << torrentFile.data << endl;
   return torrentFile;
@@ -298,7 +305,7 @@ void peerServerSendChunkResponse(peerServerInfo &peerServerSocket, torrentData &
       cout << "SERVER: The length of the packet I am sending is " << packetToSend.length << " and the length of the total packet is " << packetToSend.length + HEADER_SIZE << endl;
 
       cout << "SERVER: Sending chunk to peer" << endl; 
-      ssize_t bytesSent = send(peerServerSocket.peerConnectionfd, &packetToSend, packetToSend.length + HEADER_SIZE, MSG_DONTWAIT);
+      ssize_t bytesSent = send(peerServerSocket.peerConnectionfd, &packetToSend, packetToSend.length + HEADER_SIZE, MSG_NOSIGNAL);
       if (bytesSent == -1) {
         cout << "SERVER: Error sending chunk with error: " << strerror(errno) << endl;
         exit(1);
@@ -317,11 +324,12 @@ void peerServerReceiveAndSendData(peerServerInfo &peerServerSocket, torrentData 
   // memset(&packetToReceive, 0, sizeof(packetToReceive));
   cout << "SERVER: Attempting to receive data from peer..." << endl;
   // receive packet
-  recv(peerServerSocket.peerConnectionfd, &packetToReceive, sizeof(packetToReceive), 0); // receive, then send correct thing 
+  recv(peerServerSocket.peerConnectionfd, &packetToReceive, HEADER_SIZE, MSG_WAITALL); // receive, then send correct thing 
   if (packetToReceive.type == CHUNK_LIST_REQUEST) {
     peerServerSendChunkListResponse(peerServerSocket, torrentData);
   }
   if (packetToReceive.type == CHUNK_REQUEST) {
+    recv(peerServerSocket.peerConnectionfd, &packetToReceive.data, packetToReceive.length, MSG_WAITALL);
     unsigned int chunkCRC = 0;
     memcpy(&chunkCRC, &packetToReceive.data[0], UNSIGNED_INT_SIZE);
     peerServerSendChunkResponse(peerServerSocket, torrentData, chunkCRC);
@@ -330,7 +338,7 @@ void peerServerReceiveAndSendData(peerServerInfo &peerServerSocket, torrentData 
 
 void serverAcceptClientPeerConnection(peerServerInfo &peerServerSocket, torrentData &torrentData, vector<thread> &threads) {
   while (true) { // infinite loop
-    socklen_t addr_len = sizeof(peerServerSocket.sockfd);
+    socklen_t addr_len = sizeof(peerServerSocket.server_addr);
     cout << "SERVER: Trying to accept incoming connection...  " << endl;
     peerServerSocket.peerConnectionfd = accept(peerServerSocket.sockfd, (struct sockaddr*)&peerServerSocket.server_addr, &addr_len);
     if (peerServerSocket.peerConnectionfd == -1) {
@@ -377,8 +385,10 @@ peerSocketInfo connectToServerPeer(char* myIP, const char* peerIP) {
 void clientReceiveFileChunkListFromServerPeer(peerSocketInfo &peerSocket, torrentData &torrentData, const char *serverIP) {
   packet fileChunkResponse;
   vector<unsigned int> fileChunkList;
-  recv(peerSocket.sockfd, &fileChunkResponse, sizeof(fileChunkResponse), 0);
+  // recv(peerSocket.sockfd, &fileChunkResponse, sizeof(fileChunkResponse), 0);
+  recv(peerSocket.sockfd, &fileChunkResponse, HEADER_SIZE, MSG_WAITALL);
   if (fileChunkResponse.type == CHUNK_LIST_RESPONSE) {
+    recv(peerSocket.sockfd, &fileChunkResponse.data, fileChunkResponse.length, MSG_WAITALL);
     cout << "CLIENT: Received chunk list response from server peer" << endl;
     for (unsigned int i = 0; i <= (fileChunkResponse.length-1); i += UNSIGNED_INT_SIZE) { 
       unsigned int chunkNumber;
@@ -406,8 +416,9 @@ void clientReceiveFileChunkFromServerPeer(peerSocketInfo &peerSocket, torrentDat
   cout << "CLIENT: Attempting to receive file chunk from peer..." << endl;
   // recv(peerSocket.sockfd, &fileChunkResponse, sizeof(fileChunkResponse), 0); // wait all? two receives for type 1 3 5? all receives for all wait all
   recv(peerSocket.sockfd, &fileChunkResponse, HEADER_SIZE, MSG_WAITALL);
-  cout << "I AM GOING TO RECEIVE A LENGHT OF " << fileChunkResponse.length << endl;
+  cout << "I AM GOING TO RECEIVE A LENGTH OF " << fileChunkResponse.length << endl;
   if (fileChunkResponse.type == CHUNK_RESPONSE) {
+    recv(peerSocket.sockfd, &fileChunkResponse.data, fileChunkResponse.length, MSG_WAITALL);
     // compute CRC of chunk received
     unsigned int receivedDataCRC = crc32(fileChunkResponse.data, fileChunkResponse.length); // computing CRC with length of data
 
@@ -437,7 +448,7 @@ void clientRequestFileChunkFromServerPeer(peerSocketInfo &peerSocket, torrentDat
   fileChunkRequest.length = UNSIGNED_INT_SIZE;
   memcpy(&fileChunkRequest.data[0], &chunkCRCFromTorrentFile, UNSIGNED_INT_SIZE);
   cout << "CLIENT: Requesting file chunk from peer..." << endl;
-  send(peerSocket.sockfd, &fileChunkRequest, sizeof(fileChunkRequest), MSG_DONTWAIT); // TODO: change to MSG_NOSIGNAL for all sends
+  send(peerSocket.sockfd, &fileChunkRequest, fileChunkRequest.length + HEADER_SIZE, MSG_NOSIGNAL);
   cout << "CLIENT: Requested file chunk from peer..." << endl;
   clientReceiveFileChunkFromServerPeer(peerSocket, torrentData, chunkCRCFromTorrentFile, chunkNumber);
 }

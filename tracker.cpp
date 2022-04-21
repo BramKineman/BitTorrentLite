@@ -122,7 +122,7 @@ trackerSocketInfo setupTrackerToListen() {
   trackerSocket.server_addr.sin_family = AF_INET;
   trackerSocket.server_addr.sin_addr.s_addr = INADDR_ANY;
   trackerSocket.server_addr.sin_port = htons(PORT);
-  if (bind(trackerSocket.sockfd, (struct sockaddr*)&trackerSocket.server_addr, sizeof(trackerSocket.server_addr)) == -1) {
+  if (bind(trackerSocket.sockfd, (sockaddr*)&trackerSocket.server_addr, sizeof(trackerSocket.server_addr)) == -1) {
     cout << "Error binding tracker socket" << endl;
     exit(0);
   }
@@ -146,7 +146,7 @@ void sendTorrentFile(int sockfd, char* torrentFile) {
   packetToSend.length = bytesRead;
 
   // Send torrent file
-  ssize_t bytesSent = send(sockfd, &packetToSend, HEADER_SIZE + bytesRead, 0);
+  ssize_t bytesSent = send(sockfd, &packetToSend, HEADER_SIZE + bytesRead, MSG_NOSIGNAL);
   if (bytesSent == -1) {
     cout << "Error sending torrent file" << endl;
     exit(0);
@@ -157,7 +157,7 @@ void sendTorrentFile(int sockfd, char* torrentFile) {
 
 void receiveDataAndRespond(int sockfd, args trackerArgs) {
   // create packet to receive into
-  packet p;
+  PacketHeader p;
   // receive data
   int n = recv(sockfd, &p, sizeof(p), MSG_WAITALL);
   if (n == -1) {
@@ -169,6 +169,7 @@ void receiveDataAndRespond(int sockfd, args trackerArgs) {
     cout << "Received torrent request packet" << endl;
     // write to log file
     // writeToLogFile(trackerArgs.log, inet_ntoa(p.client_addr.sin_addr), "0", to_string(p.length));
+    // https://stackoverflow.com/questions/1276294/getting-ipv4-address-from-a-sockaddr-structure 
     // send torrent file
     sendTorrentFile(sockfd, trackerArgs.torrentFile);
   }
@@ -176,9 +177,9 @@ void receiveDataAndRespond(int sockfd, args trackerArgs) {
 
 void acceptPeerConnection(trackerSocketInfo &trackerSocket, args &trackerArgs) {
   // Accept incoming connection
-  socklen_t addr_len = sizeof(trackerSocket.sockfd);
+  socklen_t addr_len = sizeof(trackerSocket.server_addr);
   cout << "Trying to accept incoming connection" << endl;
-  trackerSocket.peerSocketfd = accept(trackerSocket.sockfd, (struct sockaddr*)&trackerSocket.server_addr, &addr_len);
+  trackerSocket.peerSocketfd = accept(trackerSocket.sockfd, (sockaddr*)&trackerSocket.server_addr, &addr_len);
   if (trackerSocket.peerSocketfd == -1) {
     cout << "Error accepting incoming connection" << endl;
     exit(0);
