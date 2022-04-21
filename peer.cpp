@@ -273,7 +273,7 @@ void peerServerSendChunkResponse(peerServerInfo &peerServerSocket, torrentData &
     if (torrentData.chunkList[i] == chunkCRC) { // if CRC exists
       chunkFound = true;
       chunkNum = i;
-      cout << "CLIENT: Received chunk request for chunk " << chunkNum << endl;
+      cout << "SERVER: Received chunk request for chunk " << chunkNum << endl;
       // read from torrentData.inputFile starting at chunkNum * FILE_CHUNK_SIZE
       // send chunk
       char chunk[FILE_CHUNK_SIZE];
@@ -397,7 +397,8 @@ void clientRequestFileChunkListFromServerPeer(peerSocketInfo &peerSocket, torren
 
 void clientReceiveFileChunkFromServerPeer(peerSocketInfo &peerSocket, torrentData &torrentData, unsigned int chunkCRCFromTorrentFile, unsigned int chunkNum) {
   packet fileChunkResponse;
-  recv(peerSocket.sockfd, &fileChunkResponse, sizeof(fileChunkResponse), 0);
+  cout << "CLIENT: Attempting to receive file chunk from peer..." << endl;
+  recv(peerSocket.sockfd, &fileChunkResponse, sizeof(fileChunkResponse), 0); // wait all?
   if (fileChunkResponse.type == CHUNK_RESPONSE) {
     // get chunk from master file
     char chunk[FILE_CHUNK_SIZE];
@@ -408,8 +409,13 @@ void clientReceiveFileChunkFromServerPeer(peerSocketInfo &peerSocket, torrentDat
     file.close();
     // compute CRC of chunk
     unsigned int receivedDataCRC = crc32(chunk, fileChunkResponse.length);
+
+    cout << endl;
+    cout << "CLIENT: Received CRC: " << receivedDataCRC << " for chunk: " << chunkNum << endl;
+    cout << "CLIENT: Correct CRC: " << chunkCRCFromTorrentFile << endl;
+    
     if (receivedDataCRC == chunkCRCFromTorrentFile) {
-      cout << "CLIENT: Received correct chunk response for chunkNum " << chunkNum << " from server peer" << endl;
+      cout << "CLIENT: Received correct chunk response for chunkNum " << chunkNum << " from server peer" << endl << endl;
       data chunkData;
       // initialize chunkData.data to 0
       memset(chunkData.data, 0, sizeof(chunkData.data));
@@ -467,7 +473,7 @@ void clientHandleServerPeerChunkRequests(torrentData &torrentData, char* myIP) {
     unsigned int chunkWithSmallestOccurence = chunkAndOccurrences.first;
     unsigned int smallestChunkOccurences = chunkAndOccurrences.second;
 
-    cout << "CLIENT: There are " << torrentData.nonOwnedChunksAndOccurrences.size() << " non-owned chunks left" << endl;
+    cout << endl << "CLIENT: There are " << torrentData.nonOwnedChunksAndOccurrences.size() << " non-owned chunks left to get" << endl;
     cout << "CLIENT: Smallest chunk occurence is " << smallestChunkOccurences << " for chunk " << chunkWithSmallestOccurence << endl;
 
     bool gotChunk = false;
@@ -509,7 +515,7 @@ void connectToEachServerPeerAndRequest(char* myIP, torrentData &torrentData, boo
         clientRequestFileChunkListFromServerPeer(clientSocketInfo, torrentData, serverIP); 
       }
     }
-    cout << "*** CLIENT: Finished getting chunk list from all peers ***" << endl;
+    cout << endl << "******************** CLIENT: Finished getting chunk list from all peers ********************" << endl << endl;
   }
   else {
     clientHandleServerPeerChunkRequests(torrentData, myIP);
@@ -548,10 +554,6 @@ int main(int argc, char* argv[])
   shutdown(peerSocket.sockfd, SHUT_RDWR);
 
   torrentData torrentData = parseTorrentFile(torrentFilePacket.data);
-  // output torrentData.chunkList
-  for (unsigned int i = 0; i < torrentData.chunkList.size(); i++) {
-    cout << "Chunk " << i << " has CRC " << torrentData.chunkList[i] << endl;
-  }
   torrentData.ownedChunksFile = peerArgs.ownedChunks;
   torrentData.inputFile = peerArgs.inputFile;
   torrentData.outputFile = peerArgs.outputFile;
@@ -577,9 +579,9 @@ int main(int argc, char* argv[])
   torrentData.nonOwnedChunksAndOccurrences = getPeerChunkOccurrences(torrentData);
 
   // output chunk count map
-  cout << "*** CLIENT: Non-Owned Chunk count map ***" << endl;
+  cout << "CLIENT: Non-Owned Chunk count map:" << endl;
   for (auto it = torrentData.nonOwnedChunksAndOccurrences.begin(); it != torrentData.nonOwnedChunksAndOccurrences.end(); it++) {
-    cout << "Chunk: " << it->first << " - " << "Occurrences: " << it->second << endl;
+    cout << "Chunk: " << it->first << " - " << "Occurrences of chunk on network: " << it->second << endl;
   }
 
   // sequentially connect to each peer for chunks
