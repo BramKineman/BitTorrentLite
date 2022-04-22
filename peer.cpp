@@ -21,6 +21,7 @@
 #include <utility>
 #include <tgmath.h>
 
+#include "mutex.cpp"
 #include "PacketHeader.h"
 #include "crc32.h"
 
@@ -37,8 +38,6 @@
 #define HEADER_SIZE sizeof(PacketHeader)
 
 using namespace std; 
-
-std::mutex loggingMutex;
 
 struct args {
   char* myIP;

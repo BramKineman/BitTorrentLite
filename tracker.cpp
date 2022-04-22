@@ -19,6 +19,7 @@
 #include <net/if.h>
 #include <netinet/in.h>
 
+#include "mutex.cpp"
 #include "PacketHeader.h"
 #include "crc32.h"
 
@@ -27,8 +28,6 @@
 #define TORRENT_REQUEST 0
 #define TORRENT_RESPONSE 1
 #define HEADER_SIZE sizeof(PacketHeader)
-
-std::mutex loggingMutex;
 
 using namespace std; 
 
@@ -58,9 +57,17 @@ auto retrieveArgs(char* argv[]) {
   return newArgs;
 }
 
-void writeToLogFile(char* logFile, char* iPAddress, char* packetType, char* packetLength) {
+void writeToLogFile(char* logFile, char* iPAddress, unsigned int packetType, unsigned int packetLength) {
   ofstream logFileStream;
   logFileStream.open(logFile, ios::app);
+  // put parameters in to one string
+  // string logString = iPAddress;
+  // logString += " ";
+  // logString += packetType;
+  // logString += " ";
+  // logString += packetLength;
+  // logFileStream << logString << endl;
+  cout << "I WANMT TO LOG: " << iPAddress << " " << packetType << " " << packetLength << endl;
   logFileStream << iPAddress << " " << packetType << " " << packetLength << endl;
   logFileStream.close();
 }
@@ -134,23 +141,30 @@ trackerSocketInfo setupTrackerToListen() {
   return trackerSocket;
 }
 
-void sendTorrentFile(int sockfd, char* torrentFile) {
+void sendTorrentFile(trackerSocketInfo &trackerSocketInfo, args trackerArgs) {
   packet packetToSend;
   memset(packetToSend.data, 0, sizeof(packetToSend.data));
   packetToSend.type = TORRENT_RESPONSE;
   // Open torrent file
-  ifstream torrentFileStream(torrentFile, ios::binary);
+  ifstream torrentFileStream(trackerArgs.torrentFile, ios::binary);
   // Read torrent file into packet
   torrentFileStream.read(packetToSend.data, FILE_CHUNK_SIZE);
   unsigned int bytesRead = torrentFileStream.gcount();
   packetToSend.length = bytesRead;
 
   // Send torrent file
-  ssize_t bytesSent = send(sockfd, &packetToSend, HEADER_SIZE + bytesRead, MSG_NOSIGNAL);
+  ssize_t bytesSent = send(trackerSocketInfo.peerSocketfd, &packetToSend, HEADER_SIZE + bytesRead, MSG_NOSIGNAL);
   if (bytesSent == -1) {
     cout << "Error sending torrent file" << endl;
     exit(0);
   }
+  // log 
+  char *ip = inet_ntoa(trackerSocketInfo.server_addr.sin_addr);
+  // lock mutex
+  loggingMutex.lock();
+  writeToLogFile(trackerArgs.log, ip, TORRENT_RESPONSE, packetToSend.length);
+  loggingMutex.unlock();
+
   torrentFileStream.close();
   cout << "Sent torrent file" << endl;
 }
@@ -171,10 +185,14 @@ void receiveDataAndRespond(trackerSocketInfo &trackerSocketInfo, args trackerArg
     // writeToLogFile(trackerArgs.log, inet_ntoa(p.client_addr.sin_addr), "0", to_string(p.length));
     // https://stackoverflow.com/questions/1276294/getting-ipv4-address-from-a-sockaddr-structure 
     
-    char *ip = inet_ntoa(trackerSocketInfo.server_addr.sin_addr);
-    cout << "SENDING TO IP: " << ip << endl;
+    char *ip = inet_ntoa(trackerSocketInfo.server_addr.sin_addr);    
+    // lock mutex
+    loggingMutex.lock();
+    writeToLogFile(trackerArgs.log, ip, TORRENT_REQUEST, p.length);
+    loggingMutex.unlock();
+
     // send torrent file
-    sendTorrentFile(trackerSocketInfo.peerSocketfd, trackerArgs.torrentFile);
+    sendTorrentFile(trackerSocketInfo, trackerArgs);
   }
 }
 
