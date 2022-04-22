@@ -57,21 +57,6 @@ auto retrieveArgs(char* argv[]) {
   return newArgs;
 }
 
-void writeToLogFile(char* logFile, char* iPAddress, unsigned int packetType, unsigned int packetLength) {
-  ofstream logFileStream;
-  logFileStream.open(logFile, ios::app);
-  // put parameters in to one string
-  // string logString = iPAddress;
-  // logString += " ";
-  // logString += packetType;
-  // logString += " ";
-  // logString += packetLength;
-  // logFileStream << logString << endl;
-  cout << "I WANMT TO LOG: " << iPAddress << " " << packetType << " " << packetLength << endl;
-  logFileStream << iPAddress << " " << packetType << " " << packetLength << endl;
-  logFileStream.close();
-}
-
 void readPeerListToTorrentFile(char* &peerListPath, char* &torrentFile, vector<string> &peerList) {
   ifstream peerListFile(peerListPath);
   string line;
@@ -181,8 +166,6 @@ void receiveDataAndRespond(trackerSocketInfo &trackerSocketInfo, args trackerArg
   
   if (p.type == TORRENT_REQUEST) {
     cout << "Received torrent request packet" << endl;
-    // write to log file
-    // writeToLogFile(trackerArgs.log, inet_ntoa(p.client_addr.sin_addr), "0", to_string(p.length));
     // https://stackoverflow.com/questions/1276294/getting-ipv4-address-from-a-sockaddr-structure 
     
     char *ip = inet_ntoa(trackerSocketInfo.server_addr.sin_addr);    
