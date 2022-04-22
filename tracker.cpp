@@ -155,11 +155,11 @@ void sendTorrentFile(int sockfd, char* torrentFile) {
   cout << "Sent torrent file" << endl;
 }
 
-void receiveDataAndRespond(int sockfd, args trackerArgs) {
+void receiveDataAndRespond(trackerSocketInfo &trackerSocketInfo, args trackerArgs) {
   // create packet to receive into
   PacketHeader p;
   // receive data
-  int n = recv(sockfd, &p, sizeof(p), MSG_WAITALL);
+  int n = recv(trackerSocketInfo.peerSocketfd, &p, sizeof(p), MSG_WAITALL);
   if (n == -1) {
     cout << "Error receiving data" << endl;
     exit(0);
@@ -170,22 +170,25 @@ void receiveDataAndRespond(int sockfd, args trackerArgs) {
     // write to log file
     // writeToLogFile(trackerArgs.log, inet_ntoa(p.client_addr.sin_addr), "0", to_string(p.length));
     // https://stackoverflow.com/questions/1276294/getting-ipv4-address-from-a-sockaddr-structure 
+    
+    char *ip = inet_ntoa(trackerSocketInfo.server_addr.sin_addr);
+    cout << "SENDING TO IP: " << ip << endl;
     // send torrent file
-    sendTorrentFile(sockfd, trackerArgs.torrentFile);
+    sendTorrentFile(trackerSocketInfo.peerSocketfd, trackerArgs.torrentFile);
   }
 }
 
-void acceptPeerConnection(trackerSocketInfo &trackerSocket, args &trackerArgs) {
+void acceptPeerConnection(trackerSocketInfo &trackerSocketInfo, args &trackerArgs) {
   // Accept incoming connection
-  socklen_t addr_len = sizeof(trackerSocket.server_addr);
+  socklen_t addr_len = sizeof(trackerSocketInfo.server_addr);
   cout << "Trying to accept incoming connection" << endl;
-  trackerSocket.peerSocketfd = accept(trackerSocket.sockfd, (sockaddr*)&trackerSocket.server_addr, &addr_len);
-  if (trackerSocket.peerSocketfd == -1) {
+  trackerSocketInfo.peerSocketfd = accept(trackerSocketInfo.sockfd, (sockaddr*)&trackerSocketInfo.server_addr, &addr_len);
+  if (trackerSocketInfo.peerSocketfd == -1) {
     cout << "Error accepting incoming connection" << endl;
     exit(0);
   }
   cout << "I connected to a peer" << endl;
-  receiveDataAndRespond(trackerSocket.peerSocketfd, trackerArgs);
+  receiveDataAndRespond(trackerSocketInfo, trackerArgs);
 }
 
 int main(int argc, char* argv[]) {
