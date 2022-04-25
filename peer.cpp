@@ -645,8 +645,8 @@ int main(int argc, char* argv[])
   connectToEachServerPeerAndRequest(peerArgs, torrentData, receivedChunkList);
 
   readTorrentDataChunksToOutputFile(torrentData);
-  // TODO: KEEP PEER RUNNING
+
   cout << "*************** DONE ***************" << endl;
-  acceptingPeers.join();
-  return 0;
+  acceptingPeers.join(); // this never joins, peers stay running
+  
 }
